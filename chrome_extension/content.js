@@ -582,9 +582,15 @@
   // Listen for result pushed back from background worker
   // ─────────────────────────────────────────────────────────────────────────────
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "PHISHING_RESULT" && message.data) {
       injectBanner(message.data);
+    }
+    if (message.type === "TRIGGER_RESCAN") {
+      delete window[SCAN_KEY];
+      runScan();
+      sendResponse({ ok: true });
+      return true;
     }
   });
 

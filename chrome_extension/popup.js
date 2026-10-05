@@ -345,6 +345,15 @@ rescanBtn.addEventListener("click", async () => {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab && tab.id) {
+    if (!tab.url || !tab.url.startsWith("http")) {
+      renderIdle();
+      setTimeout(() => {
+        rescanBtn.classList.remove("spinning");
+        rescanBtn.disabled = false;
+      }, 500);
+      return;
+    }
+
     await chrome.storage.local.remove(`tab_${tab.id}`);
     chrome.runtime.sendMessage({ type: "RESCAN_TAB", tabId: tab.id });
     renderLoading();

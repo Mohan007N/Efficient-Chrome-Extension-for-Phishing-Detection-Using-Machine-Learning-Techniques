@@ -116,15 +116,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RESCAN_TAB") {
     const tabId = message.tabId;
     if (tabId) {
-      // Re-inject the content script to re-scan
-      chrome.scripting
-        .executeScript({
-          target: { tabId: tabId },
-          files: ["content.js"],
-        })
-        .catch((err) => {
-          console.error("[Background] Re-inject failed:", err);
+      chrome.tabs.get(tabId, (tab) => {
+        if (chrome.runtime.lastError || !tab || !tab.url || !tab.url.startsWith("http")) {
+          // Internal browser pages (chrome://, about:, etc.) cannot be scripted
+          sendResponse({ ok: false, error: "Cannot scan internal browser pages." });
+          return;
+        }
+
+        // 1. Send TRIGGER_RESCAN to the existing content script
+        chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, (res) => {
+          if (chrome.runtime.lastError || !res?.ok) {
+            // 2. If content script wasn't active yet, inject safely
+            chrome.scripting
+              .executeScript({
+                target: { tabId: tabId },
+                files: ["content.js"],
+              })
+              .catch((err) => {
+                console.warn("[Background] Script injection note:", err?.message || err);
+              });
+          }
         });
+      });
     }
     sendResponse({ ok: true });
     return true;
