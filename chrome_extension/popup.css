@@ -35,13 +35,26 @@
 
 /* ── Base ───────────────────────────────────────────────────── */
 body {
-  width: 320px;
+  width: 360px;
+  max-height: 590px;
+  overflow-y: auto;
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+body::-webkit-scrollbar {
+  width: 5px;
+}
+body::-webkit-scrollbar-track {
+  background: #0d0d10;
+}
+body::-webkit-scrollbar-thumb {
+  background: #2a2a32;
+  border-radius: 4px;
 }
 
 /* ── Header ─────────────────────────────────────────────────── */
@@ -123,11 +136,15 @@ body {
 
 /* ── Body ───────────────────────────────────────────────────── */
 .body {
-  padding: 16px 14px;
+  padding: 14px;
   min-height: 168px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
+}
+
+#viewLoading, #viewIdle, #viewError {
+  margin: 20px 0;
 }
 
 /* ── Views ──────────────────────────────────────────────────── */
@@ -351,7 +368,10 @@ body {
 .stats-row {
   display: flex;
   align-items: center;
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  margin-top: 10px;
   padding: 0;
 }
 
@@ -536,56 +556,48 @@ body {
 
 .free-key-link:hover { text-decoration: underline; }
 
-/* ── Explainable AI (XAI) Container ─────────────────────────── */
-.xai-container {
-  margin-top: 12px;
+/* ── Explainable AI (XAI) Hero Card (Direct in Popup) ──────── */
+.xai-card {
+  margin-top: 14px;
   width: 100%;
+  background: #121216;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: fadeUp 0.25s var(--ease);
 }
 
-.btn-xai-toggle {
-  width: 100%;
+.xai-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border2);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s var(--ease);
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.btn-xai-toggle:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: var(--border);
-}
-
-.xai-btn-title {
+.xai-card-title {
   display: flex;
   align-items: center;
   gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.1px;
 }
 
 .xai-sparkle {
-  font-size: 13px;
+  font-size: 14px;
 }
 
-.xai-chevron {
+.xai-source-badge {
   font-size: 9px;
-  color: var(--text-3);
-  transition: transform 0.2s var(--ease);
-}
-
-.xai-body {
-  margin-top: 8px;
-  background: #111114;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px;
-  animation: fadeUp 0.2s var(--ease);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(48, 209, 88, 0.15);
+  color: var(--green);
 }
 
 .xai-section-title {
@@ -601,54 +613,109 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-bottom: 10px;
+  margin-bottom: 11px;
 }
 
 .xai-tag {
-  background: rgba(255, 69, 58, 0.08);
-  border: 1px solid rgba(255, 69, 58, 0.2);
+  background: rgba(255, 69, 58, 0.09);
+  border: 1px solid rgba(255, 69, 58, 0.22);
   color: #ff8580;
-  padding: 3px 7px;
-  border-radius: 4px;
+  padding: 4px 8px;
+  border-radius: 5px;
   font-size: 10px;
   line-height: 1.35;
 }
 
 .xai-tag.safe {
-  background: rgba(48, 209, 88, 0.08);
-  border-color: rgba(48, 209, 88, 0.2);
+  background: rgba(48, 209, 88, 0.09);
+  border-color: rgba(48, 209, 88, 0.22);
   color: #85e89d;
 }
 
 .xai-analysis-box {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border2);
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 9px 10px;
+  padding: 10px 11px;
+  margin-bottom: 10px;
 }
 
-.xai-box-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.xai-source-badge {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(10, 132, 255, 0.15);
-  color: var(--blue);
+.xai-box-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+  margin-bottom: 5px;
 }
 
 .xai-text {
   font-size: 11px;
-  color: var(--text-2);
-  line-height: 1.45;
+  color: #d8d8e0;
+  line-height: 1.5;
+}
+
+.xai-key-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.xai-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.key-icon {
+  font-size: 11px;
+}
+
+.xai-inline-input {
+  flex: 1;
+  background: #09090b;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 10px;
+  color: var(--text);
+  outline: none;
+}
+
+.xai-inline-input:focus {
+  border-color: var(--blue);
+}
+
+.btn-save-key-sm {
+  background: var(--blue);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-save-key-sm:hover { opacity: 0.9; }
+
+.xai-key-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.spinner-sm {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--text-3);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
 }
 

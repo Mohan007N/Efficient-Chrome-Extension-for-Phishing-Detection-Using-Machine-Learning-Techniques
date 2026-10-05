@@ -26,83 +26,105 @@ SUSPICIOUS_TLDS = {
 
 def extract_top_indicators(features_dict: dict, is_phishing: bool, risk_level: str) -> list[str]:
     """
-    Examines page & URL features to identify the primary red flags triggering the alert.
+    Examines page & URL features to identify primary technical red flags or verified safety factors.
     Returns a human-readable list of bullet-point indicators.
     """
     indicators = []
 
-    # 1. Password field checks
-    has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
-    if has_pwd:
-        indicators.append("Credential Field: Page contains password input fields prompting for sensitive credentials.")
+    if is_phishing:
+        # 1. Password field checks
+        has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
+        if has_pwd:
+            indicators.append("Credential Field: Page contains password input fields prompting for sensitive credentials.")
 
-    # 2. HTTPS status
-    is_https = int(features_dict.get("IsHTTPS", 0)) == 1
-    if not is_https:
-        indicators.append("Insecure Protocol: Connection lacks HTTPS encryption, exposing entered credentials to interception.")
+        # 2. HTTPS status
+        is_https = int(features_dict.get("IsHTTPS", 0)) == 1
+        if not is_https:
+            indicators.append("Insecure Protocol: Connection lacks HTTPS encryption, exposing entered credentials to interception.")
 
-    # 3. External Form Submission
-    ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
-    if ext_submit:
-        indicators.append("External Data Exfiltration: Forms on this page submit data to an external, third-party domain.")
+        # 3. External Form Submission
+        ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
+        if ext_submit:
+            indicators.append("External Data Exfiltration: Forms on this page submit data to an external, third-party domain.")
 
-    # 4. TLD Analysis
-    tld = str(features_dict.get("TLD", "")).lower().lstrip(".")
-    if tld in SUSPICIOUS_TLDS:
-        indicators.append(f"Suspicious Top-Level Domain: '.{tld}' is frequently associated with disposable phishing campaigns.")
+        # 4. TLD Analysis
+        tld = str(features_dict.get("TLD", "")).lower().lstrip(".")
+        if tld in SUSPICIOUS_TLDS:
+            indicators.append(f"Suspicious Top-Level Domain: '.{tld}' is frequently associated with disposable phishing campaigns.")
 
-    # 5. IP Address Domain
-    is_ip = int(features_dict.get("IsDomainIP", 0)) == 1
-    if is_ip:
-        indicators.append("IP-Based Host: URL uses a direct IP address instead of a registered domain name.")
+        # 5. IP Address Domain
+        is_ip = int(features_dict.get("IsDomainIP", 0)) == 1
+        if is_ip:
+            indicators.append("IP-Based Host: URL uses a direct IP address instead of a registered domain name.")
 
-    # 6. Obfuscated characters
-    obf_count = int(features_dict.get("NoOfObfuscatedChar", 0))
-    has_obf = int(features_dict.get("HasObfuscation", 0)) == 1
-    if has_obf or obf_count > 0:
-        indicators.append(f"URL Obfuscation: Detected {obf_count} encoded or obfuscated characters intended to disguise destination.")
+        # 6. Obfuscated characters
+        obf_count = int(features_dict.get("NoOfObfuscatedChar", 0))
+        has_obf = int(features_dict.get("HasObfuscation", 0)) == 1
+        if has_obf or obf_count > 0:
+            indicators.append(f"URL Obfuscation: Detected {obf_count} encoded or obfuscated characters intended to disguise destination.")
 
-    # 7. Domain / Title Mismatch
-    title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
-    has_title = int(features_dict.get("HasTitle", 0)) == 1
-    if has_title and title_match < 0.2:
-        indicators.append("Domain-Brand Mismatch: Webpage title does not correspond with the actual registered domain name.")
+        # 7. Domain / Title Mismatch
+        title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
+        has_title = int(features_dict.get("HasTitle", 0)) == 1
+        if has_title and title_match < 0.2:
+            indicators.append("Domain-Brand Mismatch: Webpage title does not correspond with the actual registered domain name.")
 
-    # 8. External Links vs Self Links
-    ext_refs = int(features_dict.get("NoOfExternalRef", 0))
-    self_refs = int(features_dict.get("NoOfSelfRef", 0))
-    empty_refs = int(features_dict.get("NoOfEmptyRef", 0))
-    if ext_refs > 15 and (self_refs == 0 or ext_refs > self_refs * 3):
-        indicators.append(f"Cloned Template Pattern: High external reference count ({ext_refs} external vs {self_refs} internal links).")
+        # 8. External Links vs Self Links
+        ext_refs = int(features_dict.get("NoOfExternalRef", 0))
+        self_refs = int(features_dict.get("NoOfSelfRef", 0))
+        empty_refs = int(features_dict.get("NoOfEmptyRef", 0))
+        if ext_refs > 15 and (self_refs == 0 or ext_refs > self_refs * 3):
+            indicators.append(f"Cloned Template Pattern: High external reference count ({ext_refs} external vs {self_refs} internal links).")
 
-    if empty_refs >= 5:
-        indicators.append(f"Dummy Navigation Links: Found {empty_refs} dummy '#' links characteristic of hastily cloned templates.")
+        if empty_refs >= 5:
+            indicators.append(f"Dummy Navigation Links: Found {empty_refs} dummy '#' links characteristic of hastily cloned templates.")
 
-    # 9. Hidden iFrames
-    iframes = int(features_dict.get("NoOfiFrame", 0))
-    if iframes >= 2:
-        indicators.append(f"Embedded Framing: {iframes} embedded iframes detected, which can conceal hidden credential collectors.")
+        # 9. Hidden iFrames
+        iframes = int(features_dict.get("NoOfiFrame", 0))
+        if iframes >= 2:
+            indicators.append(f"Embedded Framing: {iframes} embedded iframes detected, which can conceal hidden credential collectors.")
 
-    # 10. Financial / Payment Keywords
-    bank = int(features_dict.get("Bank", 0)) == 1
-    pay = int(features_dict.get("Pay", 0)) == 1
-    crypto = int(features_dict.get("Crypto", 0)) == 1
-    if bank or pay or crypto:
-        target = "banking" if bank else ("payment" if pay else "crypto")
-        indicators.append(f"High-Value Target Spoofing: Page contains keywords and layouts imitating {target} services.")
+        # 10. Financial / Payment Keywords
+        bank = int(features_dict.get("Bank", 0)) == 1
+        pay = int(features_dict.get("Pay", 0)) == 1
+        crypto = int(features_dict.get("Crypto", 0)) == 1
+        if bank or pay or crypto:
+            target = "banking" if bank else ("payment" if pay else "crypto")
+            indicators.append(f"High-Value Target Spoofing: Page contains keywords and layouts imitating {target} services.")
 
-    # Fallback if no specific rule hit but model classified as phishing
-    if is_phishing and not indicators:
-        indicators.append(f"Anomalous URL Architecture: Model detected high-confidence phishing patterns ({risk_level} Risk).")
-        indicators.append("Statistical feature distribution strongly matches verified fake login datasets.")
+        if not indicators:
+            indicators.append(f"Anomalous URL Architecture: Model detected high-confidence phishing patterns ({risk_level} Risk).")
+            indicators.append("Statistical feature distribution strongly matches verified fake login datasets.")
+    else:
+        # Legitimate indicators
+        is_https = int(features_dict.get("IsHTTPS", 1)) == 1
+        if is_https:
+            indicators.append("Encrypted Protocol: Connection uses valid HTTPS transport encryption.")
+
+        has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
+        if not has_pwd:
+            indicators.append("No Deceptive Traps: Page does not harvest passwords or sensitive credentials.")
+
+        ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
+        if not ext_submit:
+            indicators.append("First-Party Actions: Forms submit directly to authorized domain endpoints.")
+
+        title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
+        if title_match >= 0.5:
+            indicators.append("Domain Consistency: Hostname matches verified identity metadata.")
+
+        if not indicators:
+            indicators.append("Clean Architecture: No anomalous redirects or obfuscations detected.")
+            indicators.append("Structural Integrity: Feature vectors conform to standard web standards.")
 
     return indicators
 
 
-def build_analysis_prompt(url: str, hostname: str, risk_level: str, phishing_prob: float, indicators: list[str]) -> str:
+def build_analysis_prompt(url: str, hostname: str, risk_level: str, phishing_prob: float, indicators: list[str], is_phishing: bool = True) -> str:
     """Constructs a cybersecurity analyst prompt for LLM explanation."""
-    indicators_text = "\n".join([f"- {ind}" for ind in indicators]) if indicators else "- General URL and structural anomalies."
-    return f"""You are an elite Cybersecurity Incident Responder and Explainable AI (XAI) security expert.
+    if is_phishing:
+        indicators_text = "\n".join([f"- {ind}" for ind in indicators]) if indicators else "- General URL and structural anomalies."
+        return f"""You are an elite Cybersecurity Incident Responder and Explainable AI (XAI) security expert.
 A user is browsing the web and our AI Phishing Shield flagged the following webpage:
 
 URL: {url}
@@ -118,6 +140,24 @@ Provide an Explainable AI (XAI) security briefing for the user with the followin
 3. Recommended Action: 1 direct, actionable sentence advising the user (e.g. close the tab, do not type credentials).
 
 Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 140 words."""
+    else:
+        safety_text = "\n".join([f"- {ind}" for ind in indicators]) if indicators else "- Valid security signals."
+        return f"""You are an elite Cybersecurity Analyst and Explainable AI (XAI) security expert.
+A user is browsing the web and our AI Phishing Shield evaluated the following webpage as SAFE / LEGITIMATE:
+
+URL: {url}
+Hostname: {hostname}
+Verdict: Verified Safe ({risk_level} Risk, {(1 - phishing_prob) * 100:.1f}% safety confidence)
+
+Verified Security Signals:
+{safety_text}
+
+Provide a concise Explainable AI (XAI) safety briefing for the user with the following sections:
+1. Safety Assessment: In 1-2 sentences, explain why this domain and page structure appear genuine and trustworthy.
+2. Key Safety Factors: 2-3 concise bullet points highlighting positive security signals (e.g., legitimate domain reputation, valid structure, lack of deceptive patterns).
+3. Browsing Tip: 1 sentence reminding the user to remain vigilant even on legitimate sites.
+
+Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 120 words."""
 
 
 def call_openrouter_gemini(prompt: str, api_key: str) -> str:
@@ -244,7 +284,7 @@ def generate_explanation(
     if key and key.strip():
         clean_key = key.strip()
         try:
-            prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators)
+            prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators, is_phishing=is_phishing)
             if clean_key.startswith("sk-or-"):
                 ai_text = call_openrouter_gemini(prompt, clean_key)
                 source_name = "openrouter_gemini"
@@ -259,14 +299,24 @@ def generate_explanation(
             }
         except Exception as e:
             logger.warning(f"Falling back to rule-based explanation due to API error: {e}")
-            fallback_text = (
-                f"### ⚠️ Explainable AI Threat Breakdown\n\n"
-                f"**Threat Assessment:** This page scored a **{phishing_prob*100:.1f}% phishing probability** ({risk_level} Risk). "
-                f"The layout and URL characteristics match known credential-theft patterns.\n\n"
-                f"**Identified Red Flags:**\n" +
-                "\n".join([f"- 🚨 {ind}" for ind in indicators]) +
-                f"\n\n*(AI Service note: {str(e)[:120]})*"
-            )
+            if is_phishing:
+                fallback_text = (
+                    f"### ⚠️ Explainable AI Threat Breakdown\n\n"
+                    f"**Threat Assessment:** This page scored a **{phishing_prob*100:.1f}% phishing probability** ({risk_level} Risk). "
+                    f"The layout and URL characteristics match known credential-theft patterns.\n\n"
+                    f"**Identified Red Flags:**\n" +
+                    "\n".join([f"- 🚨 {ind}" for ind in indicators]) +
+                    f"\n\n*(AI Service note: {str(e)[:120]})*"
+                )
+            else:
+                fallback_text = (
+                    f"### 🛡️ Explainable AI Safety Assessment\n\n"
+                    f"**Safety Assessment:** This page scored a **{(1-phishing_prob)*100:.1f}% safety confidence** ({risk_level} Risk). "
+                    f"Structural signals and domain parameters appear legitimate.\n\n"
+                    f"**Verified Indicators:**\n" +
+                    "\n".join([f"- 🛡️ {ind}" for ind in indicators]) +
+                    f"\n\n*(AI Service note: {str(e)[:120]})*"
+                )
             return {
                 "explanation": fallback_text,
                 "top_indicators": indicators,

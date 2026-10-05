@@ -17,14 +17,6 @@ const rescanIcon   = document.getElementById("rescanIcon");
 const statsRow     = document.getElementById("statsRow");
 const errorMsg     = document.getElementById("errorMsg");
 
-// Settings Panel
-const settingsBtn      = document.getElementById("settingsBtn");
-const closeSettingsBtn = document.getElementById("closeSettingsBtn");
-const settingsPanel    = document.getElementById("settingsPanel");
-const popupKeyInput    = document.getElementById("popupKeyInput");
-const popupSaveKeyBtn  = document.getElementById("popupSaveKeyBtn");
-const popupKeyStatus   = document.getElementById("popupKeyStatus");
-
 // Safe view refs
 const safeScore      = document.getElementById("safeScore");
 const safeScoreLabel = document.getElementById("safeScoreLabel");
@@ -45,17 +37,20 @@ const statLegit = document.getElementById("statLegit");
 const statRisk  = document.getElementById("statRisk");
 
 // Explainable AI (XAI) refs
-const xaiContainer   = document.getElementById("xaiContainer");
-const xaiToggleBtn   = document.getElementById("xaiToggleBtn");
-const xaiBody        = document.getElementById("xaiBody");
-const xaiChevron     = document.getElementById("xaiChevron");
-const xaiTags        = document.getElementById("xaiTags");
-const xaiSourceBadge = document.getElementById("xaiSourceBadge");
-const xaiText        = document.getElementById("xaiText");
+const xaiCard              = document.getElementById("xaiCard");
+const xaiCardTitleText     = document.getElementById("xaiCardTitleText");
+const xaiSectionTitle      = document.getElementById("xaiSectionTitle");
+const xaiBoxLabel          = document.getElementById("xaiBoxLabel");
+const xaiTags              = document.getElementById("xaiTags");
+const xaiSourceBadge       = document.getElementById("xaiSourceBadge");
+const xaiText              = document.getElementById("xaiText");
+const popupInlineKeyInput  = document.getElementById("popupInlineKeyInput");
+const popupInlineSaveBtn   = document.getElementById("popupInlineSaveBtn");
+const popupInlineKeyStatus = document.getElementById("popupInlineKeyStatus");
+
+const DEFAULT_OPENROUTER_KEY = "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";
 
 let currentTabData = null;
-let xaiOpen = false;
-let xaiFetched = false;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 function hideAll() {
@@ -63,7 +58,7 @@ function hideAll() {
     el => (el.style.display = "none")
   );
   statsRow.style.display = "none";
-  if (xaiContainer) xaiContainer.style.display = "none";
+  if (xaiCard) xaiCard.style.display = "none";
   brandMark.className = "brand-mark";
 }
 
@@ -99,9 +94,9 @@ function formatPopupMarkdown(text) {
     .replace(/^### (.*$)/gim, '<div style="font-size:11px; font-weight:700; color:#fff; margin:6px 0 2px 0;">$1</div>')
     .replace(/^## (.*$)/gim, '<div style="font-size:12px; font-weight:700; color:#fff; margin:8px 0 3px 0;">$1</div>')
     .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#fff;">$1</strong>')
-    .replace(/\*(.*?)\*/gim, '<em style="color:#bbb;">$1</em>')
-    .replace(/^- (.*$)/gim, '<div style="margin:2px 0 2px 4px; display:flex; gap:5px; line-height:1.4;"><span style="color:#ff6b6b; flex-shrink:0;">•</span><span>$1</span></div>')
-    .replace(/\n\n/g, '<div style="height:5px;"></div>')
+    .replace(/^[\*\-] +([^\n\r]+)/gim, '<div style="margin:3px 0 3px 4px; display:flex; gap:6px; line-height:1.4;"><span style="color:#ff6b6b; flex-shrink:0;">•</span><span>$1</span></div>')
+    .replace(/\*([^\*]+)\*/gim, '<em style="color:#bbb;">$1</em>')
+    .replace(/\n\n/g, '<div style="height:6px;"></div>')
     .replace(/\n/g, '<br/>');
 }
 
@@ -174,11 +169,26 @@ function renderStats(data) {
 // ── Explainable AI (XAI) Setup ──────────────────────────────────────
 function setupXAI(data) {
   currentTabData = data;
-  xaiContainer.style.display = "block";
-  xaiOpen = false;
-  xaiFetched = false;
-  xaiBody.style.display = "none";
-  xaiChevron.style.transform = "rotate(0deg)";
+  if (!xaiCard) return;
+  xaiCard.style.display = "block";
+
+  if (xaiCardTitleText) {
+    xaiCardTitleText.textContent = data.is_phishing
+      ? "Explainable AI Threat Analysis"
+      : "Explainable AI Safety Assessment";
+  }
+
+  if (xaiSectionTitle) {
+    xaiSectionTitle.textContent = data.is_phishing
+      ? "🚨 Detected Red Flags & Indicators"
+      : "🛡️ Verified Security Indicators";
+  }
+
+  if (xaiBoxLabel) {
+    xaiBoxLabel.textContent = data.is_phishing
+      ? "AI Incident Briefing"
+      : "AI Safety Briefing";
+  }
 
   const indicators = data.top_indicators && data.top_indicators.length
     ? data.top_indicators
@@ -187,24 +197,42 @@ function setupXAI(data) {
   xaiTags.innerHTML = indicators.map(ind => `
     <div class="xai-tag ${data.is_phishing ? '' : 'safe'}">• ${ind}</div>
   `).join("");
+
+  refreshInlineKeyUI();
+  loadXAIAnalysis();
 }
 
-const DEFAULT_OPENROUTER_KEY = "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";
+function refreshInlineKeyUI() {
+  if (!popupInlineKeyInput || !popupInlineKeyStatus) return;
+  chrome.storage.local.get("gemini_api_key", (stored) => {
+    if (stored.gemini_api_key) {
+      popupInlineKeyInput.placeholder = "•••••••••••••••• (Custom Key)";
+      popupInlineKeyStatus.innerHTML = '<span style="color:#30d158;">● Custom Key Active</span>';
+    } else {
+      popupInlineKeyInput.placeholder = "sk-or-v1-a2437... (OpenRouter Active)";
+      popupInlineKeyStatus.innerHTML = '<span style="color:#30d158;">● OpenRouter Gemini Flash Connected</span>';
+    }
+  });
+}
 
-async function loadXAIAnalysis() {
+async function loadXAIAnalysis(overrideKey = null) {
   if (!currentTabData) return;
 
+  const loadingMsg = currentTabData.is_phishing
+    ? "Generating threat analysis with OpenRouter Gemini Flash..."
+    : "Generating safety briefing with OpenRouter Gemini Flash...";
+
   xaiText.innerHTML = `
-    <div style="display:flex; align-items:center; gap:6px; color:#888;">
-      <span style="display:inline-block; width:10px; height:10px; border:2px solid #666; border-top-color:#fff; border-radius:50%; animation:spin 0.8s linear infinite;"></span>
-      <span>Generating OpenRouter Gemini Flash explanation...</span>
+    <div style="display:flex; align-items:center; gap:8px; color:var(--text-3); padding:4px 0;">
+      <span class="spinner-sm"></span>
+      <span>${loadingMsg}</span>
     </div>
   `;
   xaiSourceBadge.textContent = "Analyzing...";
   xaiSourceBadge.style.color = "#0a84ff";
 
   const stored = await chrome.storage.local.get("gemini_api_key");
-  const apiKey = stored.gemini_api_key || DEFAULT_OPENROUTER_KEY;
+  const apiKey = overrideKey || stored.gemini_api_key || DEFAULT_OPENROUTER_KEY;
 
   chrome.runtime.sendMessage({
     type: "EXPLAIN_URL",
@@ -235,67 +263,31 @@ async function loadXAIAnalysis() {
     }
 
     xaiText.innerHTML = formatPopupMarkdown(res.explanation);
-    xaiFetched = true;
   });
 }
 
-xaiToggleBtn.addEventListener("click", () => {
-  xaiOpen = !xaiOpen;
-  if (xaiOpen) {
-    xaiBody.style.display = "block";
-    xaiChevron.style.transform = "rotate(180deg)";
-    if (!xaiFetched) {
-      loadXAIAnalysis();
+if (popupInlineSaveBtn) {
+  popupInlineSaveBtn.addEventListener("click", () => {
+    const val = popupInlineKeyInput.value.trim();
+    if (!val) {
+      popupInlineKeyStatus.innerHTML = '<span style="color:#ff453a;">Please enter a key</span>';
+      return;
     }
-  } else {
-    xaiBody.style.display = "none";
-    xaiChevron.style.transform = "rotate(0deg)";
-  }
-});
+    popupInlineSaveBtn.textContent = "Saving...";
+    popupInlineSaveBtn.disabled = true;
 
-// ── Settings Panel Toggle & Key Management ──────────────────────────
-function refreshSettingsStatus() {
-  chrome.storage.local.get("gemini_api_key", (stored) => {
-    if (stored.gemini_api_key) {
-      popupKeyInput.placeholder = "•••••••••••••••• (Custom Key)";
-      popupKeyStatus.innerHTML = '<span style="color:#30d158;">● Custom Key Active</span>';
-    } else {
-      popupKeyInput.placeholder = "sk-or-v1-a2437... (OpenRouter Active)";
-      popupKeyStatus.innerHTML = '<span style="color:#30d158;">● OpenRouter Gemini Flash Connected</span>';
-    }
+    chrome.storage.local.set({ gemini_api_key: val }, () => {
+      popupInlineSaveBtn.textContent = "Saved!";
+      popupInlineKeyInput.value = "";
+      refreshInlineKeyUI();
+      loadXAIAnalysis(val);
+      setTimeout(() => {
+        popupInlineSaveBtn.textContent = "Save";
+        popupInlineSaveBtn.disabled = false;
+      }, 1200);
+    });
   });
 }
-
-settingsBtn.addEventListener("click", () => {
-  const isHidden = settingsPanel.style.display === "none";
-  settingsPanel.style.display = isHidden ? "block" : "none";
-  if (isHidden) refreshSettingsStatus();
-});
-
-closeSettingsBtn.addEventListener("click", () => {
-  settingsPanel.style.display = "none";
-});
-
-popupSaveKeyBtn.addEventListener("click", () => {
-  const key = popupKeyInput.value.trim();
-  if (!key) {
-    popupKeyStatus.innerHTML = '<span style="color:#ff453a;">Please enter a key</span>';
-    return;
-  }
-  popupSaveKeyBtn.textContent = "Saving...";
-  popupSaveKeyBtn.disabled = true;
-
-  chrome.storage.local.set({ gemini_api_key: key }, () => {
-    popupSaveKeyBtn.textContent = "Saved!";
-    popupKeyInput.value = "";
-    refreshSettingsStatus();
-    if (xaiOpen) loadXAIAnalysis();
-    setTimeout(() => {
-      popupSaveKeyBtn.textContent = "Save";
-      popupSaveKeyBtn.disabled = false;
-    }, 1200);
-  });
-});
 
 // ── Main ────────────────────────────────────────────────────────────
 async function main() {

@@ -22,16 +22,10 @@
       </div>
       <div class="brand-text">
         <span class="brand-name">PhishGuard</span>
-        <span class="brand-tag">AI Security</span>
+        <span class="brand-tag">Explainable AI Security</span>
       </div>
     </div>
     <div class="header-actions">
-      <button class="btn-icon" id="settingsBtn" title="Gemini API Key Settings">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      </button>
       <button class="btn-rescan" id="rescanBtn" title="Re-scan this page">
         <svg id="rescanIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-2.2-7.8L23 10"/>
@@ -39,25 +33,6 @@
       </button>
     </div>
   </header>
-
-  <!-- Slide-down Gemini Settings Panel -->
-  <div class="settings-panel" id="settingsPanel" style="display:none">
-    <div class="settings-header">
-      <span class="settings-title">✨ Google Gemini XAI Setup</span>
-      <button class="btn-close-sm" id="closeSettingsBtn">✕</button>
-    </div>
-    <p class="settings-desc">
-      Enter your Google Gemini API key to unlock natural language Explainable AI threat analyses.
-    </p>
-    <div class="key-field-wrap">
-      <input type="password" id="popupKeyInput" placeholder="Paste Gemini API key..." class="key-input" />
-      <button class="btn-save-key" id="popupSaveKeyBtn">Save</button>
-    </div>
-    <div class="settings-footer">
-      <span class="key-status-text" id="popupKeyStatus">Checking status...</span>
-      <a href="https://aistudio.google.com/app/apikey" target="_blank" class="free-key-link">Get Free Key ↗</a>
-    </div>
-  </div>
 
   <!-- Body -->
   <main class="body" id="mainBody">
@@ -69,7 +44,7 @@
         <div class="loader-dot"></div>
       </div>
       <p class="view-title">Scanning page…</p>
-      <p class="view-sub">Running AI analysis</p>
+      <p class="view-sub">Running XGBoost & Explainable AI analysis</p>
     </div>
 
     <!-- Idle -->
@@ -80,7 +55,7 @@
         </svg>
       </div>
       <p class="view-title">Ready to scan</p>
-      <p class="view-sub">Navigate to any webpage and<br>PhishGuard will analyse it automatically.</p>
+      <p class="view-sub">Navigate to any webpage and<br>PhishGuard will explain threats automatically.</p>
     </div>
 
     <!-- Error -->
@@ -94,7 +69,7 @@
       <div class="code-hint">python backend/main.py</div>
     </div>
 
-    <!-- Safe -->
+    <!-- Safe View Header Card -->
     <div class="view" id="viewSafe" style="display:none">
       <div class="result-header">
         <div class="status-chip chip-safe">
@@ -122,7 +97,7 @@
       </div>
     </div>
 
-    <!-- Phishing -->
+    <!-- Phishing View Header Card -->
     <div class="view" id="viewPhishing" style="display:none">
       <div class="result-header">
         <div class="status-chip chip-danger" id="riskChip">
@@ -150,55 +125,68 @@
       </div>
     </div>
 
-    <!-- ── Explainable AI (XAI) Accordion Section ── -->
-    <div class="xai-container" id="xaiContainer" style="display:none">
-      <button class="btn-xai-toggle" id="xaiToggleBtn">
-        <div class="xai-btn-title">
-          <span class="xai-sparkle">✨</span>
-          <span>Why was this flagged? (XAI)</span>
-        </div>
-        <span class="xai-chevron" id="xaiChevron">▼</span>
-      </button>
-
-      <div class="xai-body" id="xaiBody" style="display:none">
-        <div class="xai-section-title">🚨 Threat Indicators</div>
-        <div class="xai-tags" id="xaiTags"></div>
-
-        <div class="xai-analysis-box">
-          <div class="xai-box-header">
-            <span>AI Incident Briefing</span>
-            <span class="xai-source-badge" id="xaiSourceBadge">Loading...</span>
-          </div>
-          <div class="xai-text" id="xaiText">
-            Click to generate Gemini Explainable AI breakdown.
-          </div>
-        </div>
+    <!-- Stats row (shown when result is ready) -->
+    <div class="stats-row" id="statsRow" style="display:none">
+      <div class="stat-item">
+        <span class="stat-label">Phishing</span>
+        <span class="stat-value danger-text" id="statPhish">—</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-item">
+        <span class="stat-label">Legitimate</span>
+        <span class="stat-value safe-text" id="statLegit">—</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-item">
+        <span class="stat-label">Risk</span>
+        <span class="stat-value" id="statRisk">—</span>
       </div>
     </div>
 
-  </main>
+    <!-- ── EXPLAINABLE AI (XAI) MAIN CARD (Directly in Popup) ── -->
+    <section class="xai-card" id="xaiCard" style="display:none">
+      <div class="xai-card-header">
+        <div class="xai-card-title">
+          <span class="xai-sparkle">✨</span>
+          <span id="xaiCardTitleText">Explainable AI Threat Analysis</span>
+        </div>
+        <span class="xai-source-badge" id="xaiSourceBadge">OpenRouter Gemini</span>
+      </div>
 
-  <!-- Stats row (shown when result is ready) -->
-  <div class="stats-row" id="statsRow" style="display:none">
-    <div class="stat-item">
-      <span class="stat-label">Phishing</span>
-      <span class="stat-value danger-text" id="statPhish">—</span>
-    </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-label">Legitimate</span>
-      <span class="stat-value safe-text" id="statLegit">—</span>
-    </div>
-    <div class="stat-divider"></div>
-    <div class="stat-item">
-      <span class="stat-label">Risk</span>
-      <span class="stat-value" id="statRisk">—</span>
-    </div>
-  </div>
+      <!-- Threat Indicators / Feature Attribution -->
+      <div class="xai-section-title" id="xaiSectionTitle">🚨 Detected Red Flags & Indicators</div>
+      <div class="xai-tags" id="xaiTags"></div>
+
+      <!-- AI Incident Briefing Box -->
+      <div class="xai-analysis-box">
+        <div class="xai-box-label" id="xaiBoxLabel">AI Incident Briefing</div>
+        <div class="xai-text" id="xaiText">
+          <div style="display:flex; align-items:center; gap:8px; color:var(--text-3); padding:4px 0;">
+            <span class="spinner-sm"></span>
+            <span>Generating explanation with OpenRouter Gemini Flash...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inline API Key Management Bar -->
+      <div class="xai-key-bar">
+        <div class="xai-key-row">
+          <span class="key-icon">🔑</span>
+          <input type="password" id="popupInlineKeyInput" placeholder="sk-or-v1-a2437... (Active)" class="xai-inline-input" />
+          <button id="popupInlineSaveBtn" class="btn-save-key-sm">Save</button>
+        </div>
+        <div class="xai-key-info">
+          <span id="popupInlineKeyStatus" class="key-status-text">● OpenRouter Gemini Flash Connected</span>
+          <a href="https://openrouter.ai/keys" target="_blank" class="free-key-link">OpenRouter Keys ↗</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
 
   <!-- Footer -->
   <footer class="footer">
-    <span class="footer-brand">PhishGuard v1.0 • XAI Powered</span>
+    <span class="footer-brand">PhishGuard v1.0 • OpenRouter Gemini Flash</span>
     <a href="http://127.0.0.1:8000/docs" target="_blank" class="footer-link">API Docs →</a>
   </footer>
 
