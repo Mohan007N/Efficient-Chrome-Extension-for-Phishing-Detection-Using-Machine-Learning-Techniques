@@ -173,6 +173,7 @@ class PhishingPredictor:
                 "verdict": "✅ TRUSTED DOMAIN — Whitelisted",
                 "risk_level": "LOW",
                 "whitelisted": True,
+                "top_indicators": ["Verified global domain in trusted security registry."],
             }
 
         # ── 2. Build feature DataFrame ───────────────────────────────────────
@@ -231,6 +232,9 @@ class PhishingPredictor:
             f"risk={risk_level} | domain={root or hostname}"
         )
 
+        from backend.explainer import extract_top_indicators
+        top_indicators = extract_top_indicators(features_dict, is_phishing, risk_level)
+
         return {
             "is_phishing": is_phishing,
             "phishing_probability": phishing_prob,
@@ -238,4 +242,5 @@ class PhishingPredictor:
             "verdict": verdict,
             "risk_level": risk_level,
             "whitelisted": False,
+            "top_indicators": top_indicators,
         }

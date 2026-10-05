@@ -109,6 +109,7 @@ class PredictionResponse(BaseModel):
     verdict: str = Field(description="Human-readable verdict")
     risk_level: str = Field(description="Risk level: HIGH, MEDIUM, LOW, or SAFE")
     whitelisted: bool = Field(default=False, description="True if domain is in the trusted whitelist")
+    top_indicators: list[str] = Field(default_factory=list, description="Top red flags or reasons for classification")
 
 
 class HealthResponse(BaseModel):
@@ -117,3 +118,22 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     model_type: str
     feature_count: int
+
+
+class ExplainRequest(BaseModel):
+    """Request for Explainable AI (XAI) analysis."""
+    url: str = Field(default="", description="Full URL of the page")
+    hostname: Optional[str] = Field(default="", description="Hostname of the page")
+    is_phishing: Optional[bool] = Field(default=True, description="True if page was flagged as phishing")
+    risk_level: Optional[str] = Field(default="HIGH", description="Risk level (HIGH, MEDIUM, LOW)")
+    phishing_probability: Optional[float] = Field(default=0.95, description="Phishing confidence probability")
+    features: Optional[dict] = Field(default_factory=dict, description="Extracted feature key-values")
+    gemini_api_key: Optional[str] = Field(default=None, description="Optional Google Gemini API key")
+
+
+class ExplainResponse(BaseModel):
+    """Response returned by the /explain endpoint."""
+    explanation: str = Field(description="Human-readable explanation from Gemini AI or rule engine")
+    top_indicators: list[str] = Field(default_factory=list, description="List of technical red flags")
+    source: str = Field(description="'gemini', 'rule_based', or 'rule_based_fallback'")
+    error: Optional[str] = Field(default=None, description="Optional error message if Gemini call failed")

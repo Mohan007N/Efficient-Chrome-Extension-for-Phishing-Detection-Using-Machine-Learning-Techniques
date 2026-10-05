@@ -24,8 +24,9 @@ from fastapi.responses import JSONResponse
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from backend.schemas import URLFeaturesRequest, PredictionResponse, HealthResponse
+from backend.schemas import URLFeaturesRequest, PredictionResponse, HealthResponse, ExplainRequest, ExplainResponse
 from backend.predictor import PhishingPredictor
+from backend.explainer import generate_explanation
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -131,6 +132,30 @@ async def predict(request: URLFeaturesRequest):
     except Exception as e:
         logger.error(f"Prediction error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+
+@app.post("/explain", response_model=ExplainResponse, tags=["Explainable AI"])
+async def explain(request: ExplainRequest):
+    """
+    Explainable AI (XAI) Endpoint:
+    Provides a detailed incident breakdown of why a website was flagged or deemed safe.
+    Utilizes Google Gemini API if an API key is provided, with intelligent
+    rule-based technical feature attribution as fallback.
+    """
+    try:
+        explanation_data = generate_explanation(
+            url=request.url,
+            hostname=request.hostname,
+            is_phishing=request.is_phishing,
+            risk_level=request.risk_level,
+            phishing_prob=request.phishing_probability,
+            features_dict=request.features or {},
+            api_key=request.gemini_api_key,
+        )
+        return ExplainResponse(**explanation_data)
+    except Exception as e:
+        logger.error(f"Explanation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

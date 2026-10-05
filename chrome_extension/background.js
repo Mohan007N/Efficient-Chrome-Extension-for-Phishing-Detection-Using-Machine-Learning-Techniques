@@ -47,6 +47,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           legitimate_probability: result.legitimate_probability,
           verdict: result.verdict,
           risk_level: result.risk_level,
+          whitelisted: result.whitelisted || false,
+          top_indicators: result.top_indicators || [],
+          features: features,
         };
 
         chrome.storage.local.set({ [`tab_${tabId}`]: storageData });
@@ -88,6 +91,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Handle Explainable AI request
+  if (message.type === "EXPLAIN_URL") {
+    chrome.storage.local.get("gemini_api_key", (stored) => {
+      const apiKey = message.gemini_api_key || stored.gemini_api_key || DEFAULT_GEMINI_KEY;
+      const payload = {
+        url: message.url || "",
+        hostname: message.hostname || "",
+        is_phishing: message.is_phishing !== false,
+        risk_level: message.risk_level || "HIGH",
+        phishing_probability: message.phishing_probability || 0.95,
+        features: message.features || {},
+        gemini_api_key: apiKey,
+      };
+
+      callExplainAPI(payload)
+        .then((res) => sendResponse(res))
+        .catch((err) => sendResponse({ error: err.message }));
+    });
+    return true;
+  }
+
   // Handle popup requesting a re-scan of the current tab
   if (message.type === "RESCAN_TAB") {
     const tabId = message.tabId;
@@ -108,8 +132,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API call
+// API calls
 // ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_GEMINI_KEY = "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";
 
 async function callPredictAPI(features) {
   const response = await fetch(`${API_BASE_URL}/predict`, {
@@ -127,6 +153,125 @@ async function callPredictAPI(features) {
   }
 
   return response.json();
+}
+
+async function callExplainAPI(payload) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/explain`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    console.warn("[Background] Backend /explain request failed, attempting direct fallback:", err);
+  }
+
+  // Direct client-side fallback if backend is unreachable
+  const key = payload.gemini_api_key || DEFAULT_GEMINI_KEY;
+  if (key) {
+    return await callGeminiDirectly({ ...payload, gemini_api_key: key });
+  }
+
+  return {
+    explanation: "⚠️ Backend API is offline and no API key is configured. Please start the server (python backend/main.py).",
+    top_indicators: payload.features ? ["High risk detection triggered."] : [],
+    source: "offline_fallback",
+  };
+}
+
+async function callGeminiDirectly(payload) {
+  const key = (payload.gemini_api_key || DEFAULT_GEMINI_KEY).trim();
+  const prompt = `You are a Cybersecurity Incident Responder. Explain why this website was flagged as phishing:
+Target URL: ${payload.url}
+Phishing Probability: ${((payload.phishing_probability || 0.9) * 100).toFixed(1)}%
+Risk Level: ${payload.risk_level || "HIGH"}
+
+Provide a concise 3-point briefing:
+1. Threat Summary: Why this page is suspicious (e.g. credential harvesting or brand spoofing).
+2. Key Red Flags: 3 concise bullet points identifying the technical danger signs.
+3. User Action: 1 direct safety advisory.
+Keep it under 130 words with clear bullet points.`;
+
+  // Check if OpenRouter key
+  if (key.startsWith("sk-or-")) {
+    const models = ["google/gemini-2.5-flash", "google/gemini-3.8-flash", "google/gemini-3.7-flash", "google/gemini-3.5-flash"];
+    for (const model of models) {
+      try {
+        const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${key}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://127.0.0.1:8000",
+            "X-Title": "AI Phishing Shield",
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: "system", content: "You are an elite Cybersecurity Incident Responder providing concise Explainable AI briefings." },
+              { role: "user", content: prompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 350,
+          }),
+        });
+
+        if (resp.ok) {
+          const json = await resp.json();
+          const text = json.choices?.[0]?.message?.content;
+          if (text) {
+            return {
+              explanation: text,
+              top_indicators: ["OpenRouter Gemini Flash threat analysis generated."],
+              source: "openrouter_direct",
+            };
+          }
+        }
+      } catch (e) {
+        console.warn(`[Background] OpenRouter ${model} error:`, e);
+      }
+    }
+  }
+
+  // Google Generative Language direct endpoint
+  const googleModels = ["gemini-2.0-flash", "gemini-1.5-flash"];
+  for (const model of googleModels) {
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
+          }),
+        }
+      );
+      if (resp.ok) {
+        const json = await resp.json();
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          return {
+            explanation: text,
+            top_indicators: ["Direct Google Gemini threat analysis generated."],
+            source: "gemini_direct",
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`[Background] Direct Gemini ${model} failed:`, err);
+    }
+  }
+
+  throw new Error("AI explanation request failed. Please check your OpenRouter / Gemini key.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
