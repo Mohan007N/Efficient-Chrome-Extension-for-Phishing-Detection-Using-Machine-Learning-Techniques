@@ -620,7 +620,7 @@
         }
       );
     } catch (err) {
-      console.error("[PhishGuard] Feature extraction error:", err);
+      console.warn("[PhishGuard] Feature extraction error:", err);
     }
   }
 

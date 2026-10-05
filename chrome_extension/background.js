@@ -59,7 +59,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.tabs.sendMessage(tabId, {
           type: "PHISHING_RESULT",
           data: storageData,
-        }).catch(() => {}); // Tab may have navigated — ignore
+        }, () => {
+          if (chrome.runtime.lastError) {
+            // Tab navigated or closed — harmlessly ignore
+          }
+        });
 
         // ── Native OS notification for phishing pages ──
         if (result.is_phishing) {
@@ -118,28 +122,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (tabId) {
       chrome.tabs.get(tabId, (tab) => {
         if (chrome.runtime.lastError || !tab || !tab.url || !tab.url.startsWith("http")) {
-          // Internal browser pages (chrome://, about:, etc.) cannot be scripted
-          sendResponse({ ok: false, error: "Cannot scan internal browser pages." });
+          // Internal pages (chrome://, about:, etc.) cannot be scanned
+          sendResponse({ ok: false, reason: "Non-web page" });
           return;
         }
 
-        // 1. Send TRIGGER_RESCAN to the existing content script
-        chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, (res) => {
-          if (chrome.runtime.lastError || !res?.ok) {
-            // 2. If content script wasn't active yet, inject safely
-            chrome.scripting
-              .executeScript({
-                target: { tabId: tabId },
-                files: ["content.js"],
-              })
-              .catch((err) => {
-                console.warn("[Background] Script injection note:", err?.message || err);
-              });
+        // Notify content script to re-evaluate the page
+        chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, () => {
+          if (chrome.runtime.lastError) {
+            // If content script was not yet active on the tab, reload it
+            chrome.tabs.reload(tabId);
           }
         });
+        sendResponse({ ok: true });
       });
+      return true;
     }
-    sendResponse({ ok: true });
+    sendResponse({ ok: false });
     return true;
   }
 });
