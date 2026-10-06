@@ -15,7 +15,7 @@ import urllib.error
 
 logger = logging.getLogger("PhishingAPI.Explainer")
 
-DEFAULT_OPENROUTER_KEY = "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"
+DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 SUSPICIOUS_TLDS = {
     "xyz", "top", "work", "tk", "ml", "cf", "gq", "ga", "buzz", "cc",

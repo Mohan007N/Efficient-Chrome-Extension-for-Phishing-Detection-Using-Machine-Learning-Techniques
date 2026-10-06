@@ -65,15 +65,85 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         });
 
-        // ── Native OS notification for phishing pages ──
+        // ── Native OS notification with Explainable AI (XAI) context ──
         if (result.is_phishing) {
           const pct = Math.round((result.phishing_probability || 0) * 100);
+
+          // Build XAI indicator summary for the notification
+          const indicators = storageData.top_indicators || [];
+          const indicatorSummary = indicators.length > 0
+            ? "\n\n🔍 XAI Red Flags:\n" + indicators.slice(0, 3).map(ind => `• ${ind}`).join("\n")
+            : "";
+
           chrome.notifications.create(`phish_${tabId}_${Date.now()}`, {
             type: "basic",
             iconUrl: "icons/icon128.png",
-            title: `⚠️ Phishing Page Detected! [${result.risk_level} RISK]`,
-            message: `${pct}% confidence this page is a phishing attempt. Do NOT enter your credentials!`,
+            title: `⚠️ Phishing Detected! [${result.risk_level} RISK] — ${pct}% Confidence`,
+            message: `Do NOT enter credentials on this page!${indicatorSummary}`,
             priority: 2,
+          });
+
+          // Fire async XAI deep-analysis notification via /explain endpoint
+          (async () => {
+            try {
+              const stored = await chrome.storage.local.get("gemini_api_key");
+              const apiKey = stored.gemini_api_key || "";
+              let hostname = "";
+              try { hostname = new URL(pageUrl).hostname; } catch (_) {}
+
+              const explainPayload = {
+                url: pageUrl,
+                hostname: hostname,
+                is_phishing: true,
+                risk_level: result.risk_level || "HIGH",
+                phishing_probability: result.phishing_probability || 0.95,
+                features: features || {},
+                gemini_api_key: apiKey,
+              };
+
+              const explainResult = await callExplainAPI(explainPayload);
+              if (explainResult && explainResult.explanation) {
+                // Extract a concise summary from the AI explanation for the notification
+                const rawExplanation = explainResult.explanation;
+                // Strip markdown formatting for plain-text notification
+                const plainText = rawExplanation
+                  .replace(/#{1,3}\s*/g, "")
+                  .replace(/\*\*(.*?)\*\*/g, "$1")
+                  .replace(/\*(.*?)\*/g, "$1")
+                  .replace(/```[\s\S]*?```/g, "")
+                  .trim();
+                // Truncate to fit OS notification limits (~250 chars)
+                const truncated = plainText.length > 280
+                  ? plainText.substring(0, 277) + "..."
+                  : plainText;
+
+                const sourceName = explainResult.source === "openrouter_gemini" || explainResult.source === "openrouter_direct"
+                  ? "OpenRouter Gemini"
+                  : explainResult.source === "gemini" || explainResult.source === "gemini_direct"
+                    ? "Google Gemini AI"
+                    : "Rule-Based XAI";
+
+                chrome.notifications.create(`xai_${tabId}_${Date.now()}`, {
+                  type: "basic",
+                  iconUrl: "icons/icon128.png",
+                  title: `✨ XAI Threat Briefing [${sourceName}]`,
+                  message: truncated,
+                  priority: 2,
+                });
+              }
+            } catch (e) {
+              console.warn("[Background] XAI notification follow-up failed:", e);
+            }
+          })();
+        } else {
+          // Safe page — brief XAI confirmation notification
+          const legitPct = Math.round((result.legitimate_probability || (1 - result.phishing_probability) || 0) * 100);
+          chrome.notifications.create(`safe_${tabId}_${Date.now()}`, {
+            type: "basic",
+            iconUrl: "icons/icon128.png",
+            title: `🛡️ Page Verified Safe — ${legitPct}% Confidence`,
+            message: `PhishGuard XAI analysis found no phishing indicators on this page.`,
+            priority: 0,
           });
         }
 
@@ -98,7 +168,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Handle Explainable AI request
   if (message.type === "EXPLAIN_URL") {
     chrome.storage.local.get("gemini_api_key", (stored) => {
-      const apiKey = message.gemini_api_key || stored.gemini_api_key || DEFAULT_GEMINI_KEY;
+      const apiKey = message.gemini_api_key || stored.gemini_api_key || "";
       const payload = {
         url: message.url || "",
         hostname: message.hostname || "",
@@ -147,8 +217,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // API calls
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_GEMINI_KEY = "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";
-
 async function callPredictAPI(features) {
   const response = await fetch(`${API_BASE_URL}/predict`, {
     method: "POST",
@@ -185,9 +253,9 @@ async function callExplainAPI(payload) {
     console.warn("[Background] Backend /explain request failed, attempting direct fallback:", err);
   }
 
-  // Direct client-side fallback if backend is unreachable
-  const key = payload.gemini_api_key || DEFAULT_GEMINI_KEY;
-  if (key) {
+  // Direct client-side fallback if backend is unreachable and user has a key
+  const key = payload.gemini_api_key || "";
+  if (key && key.trim()) {
     return await callGeminiDirectly({ ...payload, gemini_api_key: key });
   }
 
@@ -199,7 +267,10 @@ async function callExplainAPI(payload) {
 }
 
 async function callGeminiDirectly(payload) {
-  const key = (payload.gemini_api_key || DEFAULT_GEMINI_KEY).trim();
+  const key = (payload.gemini_api_key || "").trim();
+  if (!key) {
+    throw new Error("No API key configured. Add your key in the extension Settings.");
+  }
   const prompt = `You are a Cybersecurity Incident Responder. Explain why this website was flagged as phishing:
 Target URL: ${payload.url}
 Phishing Probability: ${((payload.phishing_probability || 0.9) * 100).toFixed(1)}%

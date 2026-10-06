@@ -293,6 +293,11 @@
     const icon = isPhishing ? "!" : "✓";
 
     banner.innerHTML = `
+      <style>
+        @keyframes pgSpin { to { transform: rotate(360deg); } }
+        @keyframes pgPulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+        #__pg_ask_ai_btn__:hover { filter: brightness(1.15) !important; transform: scale(1.01); }
+      </style>
       <div style="
         background:${C.bg}; border-bottom:1px solid ${C.border};
         box-shadow:0 6px 24px rgba(0,0,0,0.5);
@@ -320,25 +325,6 @@
         </div>
 
         <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-          <!-- Explainable AI Button -->
-          <button id="__pg_explain_btn__" style="
-            background: ${isPhishing ? 'rgba(255,69,58,0.18)' : 'rgba(48,209,88,0.15)'};
-            border: 1px solid ${isPhishing ? 'rgba(255,69,58,0.4)' : 'rgba(48,209,88,0.3)'};
-            color: ${C.accent};
-            cursor: pointer;
-            font-size: 11px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 6px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            transition: all 0.2s ease;
-          " title="Click to view why this page was flagged using Explainable AI">
-            <span>✨ Why was this flagged?</span>
-            <span id="__pg_drawer_chevron__" style="font-size:9px; transition: transform 0.2s;">▼</span>
-          </button>
-
           <div style="
             background:${C.chipBg}; border:1px solid ${C.chipBdr};
             color:${C.accent}; font-size:10px; font-weight:600;
@@ -356,7 +342,33 @@
       </div>
       <div style="height:2px; background:linear-gradient(90deg, ${C.accent} ${isPhishing ? pct : legitPct}%, rgba(255,255,255,0.04) ${isPhishing ? pct : legitPct}%);"></div>
 
-      <!-- ── Explainable AI (XAI) Expandable Drawer ── -->
+      <!-- ══════ BIG ASK AI BUTTON — Full Width ══════ -->
+      <div style="background:${C.bg}; padding:8px 18px 10px 18px; border-bottom:1px solid ${C.border};">
+        <button id="__pg_ask_ai_btn__" style="
+          width: 100%;
+          padding: 10px 16px;
+          background: linear-gradient(135deg, ${isPhishing ? '#ff453a' : '#30d158'} 0%, ${isPhishing ? '#d63030' : '#28a847'} 100%);
+          border: none;
+          border-radius: 8px;
+          color: #fff;
+          font-size: 14px;
+          font-weight: 700;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          transition: all 0.2s ease;
+          box-shadow: 0 4px 14px ${isPhishing ? 'rgba(255,69,58,0.35)' : 'rgba(48,209,88,0.3)'};
+          letter-spacing: 0.2px;
+        " title="Get Explainable AI analysis of this page">
+          <span style="font-size:18px;">🤖</span>
+          <span id="__pg_ask_ai_label__">${isPhishing ? 'Ask AI — Why is this dangerous?' : 'Ask AI — Why is this safe?'}</span>
+          <span id="__pg_drawer_chevron__" style="font-size:11px; transition: transform 0.25s;">▼</span>
+        </button>
+      </div>
+
+      <!-- ── Explainable AI (XAI) Panel ── -->
       <div id="__pg_explain_drawer__" style="
         display: none;
         background: #111115;
@@ -372,12 +384,12 @@
         <!-- Section 1: Detected Indicators / Feature Attribution -->
         <div style="margin-bottom: 12px;">
           <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: ${C.accent}; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
-            <span>🛡️ Detected Red Flags & Technical Indicators</span>
+            <span>${isPhishing ? '🚨 Detected Red Flags & Technical Indicators' : '🛡️ Verified Security Indicators'}</span>
           </div>
           <div id="__pg_indicators_list__" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
         </div>
 
-        <!-- Section 2: Google Gemini AI Analysis Box -->
+        <!-- Section 2: AI Analysis Box -->
         <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <div style="display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: #fff;">
@@ -396,7 +408,7 @@
           </div>
         </div>
 
-        <!-- Section 3: Gemini API Key Management -->
+        <!-- Section 3: API Key Management -->
         <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.07); font-size: 11px;">
           <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 250px;">
             <span style="color: #999; flex-shrink: 0;">🔑 Gemini API Key:</span>
@@ -448,7 +460,6 @@
     }
 
     // ── Explainable AI Drawer Toggle & Logic ──
-    const explainBtn   = banner.querySelector("#__pg_explain_btn__");
     const drawer       = banner.querySelector("#__pg_explain_drawer__");
     const chevron      = banner.querySelector("#__pg_drawer_chevron__");
     const indList      = banner.querySelector("#__pg_indicators_list__");
@@ -475,17 +486,16 @@
     let drawerOpen = false;
     let explanationFetched = false;
 
-    const DEFAULT_OPENROUTER_KEY = "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";
+
 
     function refreshKeyUI() {
       chrome.storage.local.get("gemini_api_key", (stored) => {
-        const key = stored.gemini_api_key || DEFAULT_OPENROUTER_KEY;
         if (stored.gemini_api_key) {
           keyInput.placeholder = "•••••••••••••••• (Custom Key)";
-          keyStatus.innerHTML = '<span style="color:#30d158;">● Custom Key Active</span>';
+          keyStatus.innerHTML = '<span style="color:#30d158;">● API Key Active</span>';
         } else {
-          keyInput.placeholder = "sk-or-v1-a2437... (OpenRouter Active)";
-          keyStatus.innerHTML = '<span style="color:#30d158;">● OpenRouter Gemini Flash Connected</span>';
+          keyInput.placeholder = "Enter your OpenRouter or Gemini API key";
+          keyStatus.innerHTML = '<span style="color:#888;">● No API key — using rule-based analysis</span>';
         }
       });
     }
@@ -494,7 +504,7 @@
       aiContent.innerHTML = `
         <div style="display:flex; align-items:center; gap:8px; color:#aaa;">
           <span style="display:inline-block; width:12px; height:12px; border:2px solid #666; border-top-color:#fff; border-radius:50%; animation:pgSpin 0.8s linear infinite;"></span>
-          <span>Consulting OpenRouter Gemini Flash security engine...</span>
+          <span>Generating AI security analysis...</span>
         </div>
       `;
       aiBadge.textContent = "Analyzing...";
@@ -502,7 +512,7 @@
       aiBadge.style.color = "#58a6ff";
 
       const stored = await chrome.storage.local.get("gemini_api_key");
-      const apiKey = overrideKey || stored.gemini_api_key || DEFAULT_OPENROUTER_KEY;
+      const apiKey = overrideKey || stored.gemini_api_key || "";
 
       chrome.runtime.sendMessage({
         type: "EXPLAIN_URL",
@@ -541,12 +551,26 @@
       });
     }
 
-    explainBtn.addEventListener("click", () => {
+    // ── Auto-open XAI drawer for phishing detections ──
+    if (isPhishing) {
+      drawerOpen = true;
+      drawer.style.display = "block";
+      chevron.style.transform = "rotate(180deg)";
+      const askLabel = banner.querySelector("#__pg_ask_ai_label__");
+      if (askLabel) askLabel.textContent = isPhishing ? "🤖 AI Analysis — Threat Breakdown" : "🤖 AI Analysis — Safety Report";
+      refreshKeyUI();
+      loadExplanation();
+    }
+
+    const askAiBtn = banner.querySelector("#__pg_ask_ai_btn__");
+    askAiBtn.addEventListener("click", () => {
       drawerOpen = !drawerOpen;
+      const askLabel = banner.querySelector("#__pg_ask_ai_label__");
       if (drawerOpen) {
         if (autoDismissTimer) clearTimeout(autoDismissTimer);
         drawer.style.display = "block";
         chevron.style.transform = "rotate(180deg)";
+        if (askLabel) askLabel.textContent = isPhishing ? "🤖 AI Analysis — Threat Breakdown" : "🤖 AI Analysis — Safety Report";
         refreshKeyUI();
         if (!explanationFetched) {
           loadExplanation();
@@ -554,6 +578,7 @@
       } else {
         drawer.style.display = "none";
         chevron.style.transform = "rotate(0deg)";
+        if (askLabel) askLabel.textContent = isPhishing ? "Ask AI — Why is this dangerous?" : "Ask AI — Why is this safe?";
       }
     });
 
