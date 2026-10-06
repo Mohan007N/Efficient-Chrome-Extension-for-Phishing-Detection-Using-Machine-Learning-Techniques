@@ -1,4 +1,4 @@
-# AI-Powered Fake Login Page Detection using Machine Learning
+# AI-Powered Fake Login Page Detection using Machine Learning.
 
 A complete, professional machine learning project for **B.Tech 3rd-Year AI & Data Science**. This project focuses on detecting phishing URLs and fake login pages by training classification models (Decision Tree, Random Forest, and XGBoost) on the **PhiUSIIL Phishing URL Dataset**. The trained best model is serialized for later integration into a Chrome Browser Extension via a web API backend (Flask/FastAPI).
 
