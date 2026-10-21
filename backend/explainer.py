@@ -231,13 +231,18 @@ def call_google_gemini_direct(prompt: str, api_key: str) -> str:
     """
     Calls Google Generative Language endpoint directly with standard Gemini keys.
     """
-    models = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+    # Fast, high-availability models placed first to avoid timeouts and high-traffic 503 errors
+    models = [
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash",
+    ]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 400,
+            "maxOutputTokens": 300,
         },
     }
     data = json.dumps(payload).encode("utf-8")
@@ -247,7 +252,7 @@ def call_google_gemini_direct(prompt: str, api_key: str) -> str:
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with urllib.request.urlopen(req, timeout=18) as resp:
                 resp_json = json.loads(resp.read().decode("utf-8"))
                 candidates = resp_json.get("candidates", [])
                 if candidates:
@@ -303,6 +308,16 @@ def generate_explanation(
             }
         except Exception as e:
             logger.warning(f"Falling back to rule-based explanation due to API error: {e}")
+            err_str = str(e)
+            if "HTTP 503" in err_str or "Service Unavailable" in err_str:
+                service_note = "AI servers are experiencing temporary high demand; displaying local XAI analysis."
+            elif "timed out" in err_str.lower():
+                service_note = "Cloud AI response timed out; displaying local XAI analysis."
+            elif "Invalid" in err_str:
+                service_note = "Gemini API key is invalid or expired."
+            else:
+                service_note = "Cloud AI temporarily unavailable; displaying local XAI analysis."
+
             if is_phishing:
                 fallback_text = (
                     f"### ⚠️ Explainable AI Threat Breakdown\n\n"
@@ -310,7 +325,7 @@ def generate_explanation(
                     f"The layout and URL characteristics match known credential-theft patterns.\n\n"
                     f"**Identified Red Flags:**\n" +
                     "\n".join([f"- 🚨 {ind}" for ind in indicators]) +
-                    f"\n\n*(AI Service note: {str(e)[:120]})*"
+                    f"\n\n*({service_note})*"
                 )
             else:
                 fallback_text = (
@@ -319,7 +334,7 @@ def generate_explanation(
                     f"Structural signals and domain parameters appear legitimate.\n\n"
                     f"**Verified Indicators:**\n" +
                     "\n".join([f"- 🛡️ {ind}" for ind in indicators]) +
-                    f"\n\n*(AI Service note: {str(e)[:120]})*"
+                    f"\n\n*({service_note})*"
                 )
             return {
                 "explanation": fallback_text,
