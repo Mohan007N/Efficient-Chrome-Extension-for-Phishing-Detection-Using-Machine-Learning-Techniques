@@ -12,6 +12,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -365,3 +366,25 @@ def generate_explanation(
         "top_indicators": indicators,
         "source": "rule_based",
     }
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    print("Running Explainable AI (XAI) Diagnostic Self-Test...")
+    test_res = generate_explanation(
+        url="https://google.com",
+        hostname="google.com",
+        is_phishing=False,
+        risk_level="SAFE",
+        phishing_prob=0.015,
+        features_dict={"URLLength": 18, "IsHTTPS": 1, "HasPasswordField": 0},
+    )
+    print(f"\nEngine Source: {test_res.get('source')}")
+    print("\nGenerated Explanation:\n")
+    print(test_res.get("explanation"))
+
+
