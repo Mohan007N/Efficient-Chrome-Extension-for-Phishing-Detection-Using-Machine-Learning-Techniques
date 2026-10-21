@@ -12,10 +12,14 @@ import json
 import logging
 import urllib.request
 import urllib.error
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("PhishingAPI.Explainer")
 
 DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 
 SUSPICIOUS_TLDS = {
     "xyz", "top", "work", "tk", "ml", "cf", "gq", "ga", "buzz", "cc",
@@ -227,7 +231,7 @@ def call_google_gemini_direct(prompt: str, api_key: str) -> str:
     """
     Calls Google Generative Language endpoint directly with standard Gemini keys.
     """
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    models = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -243,7 +247,7 @@ def call_google_gemini_direct(prompt: str, api_key: str) -> str:
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=12) as resp:
                 resp_json = json.loads(resp.read().decode("utf-8"))
                 candidates = resp_json.get("candidates", [])
                 if candidates:
@@ -276,10 +280,10 @@ def generate_explanation(
 ) -> dict:
     """
     Main entry point for generating explanations.
-    Uses OpenRouter Gemini Flash or Google Gemini API; falls back to rule-based XAI if unavailable.
+    Uses Google Gemini API or OpenRouter Gemini Flash; falls back to rule-based XAI if unavailable.
     """
     indicators = extract_top_indicators(features_dict, is_phishing, risk_level)
-    key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("GEMINI_API_KEY") or DEFAULT_OPENROUTER_KEY
+    key = api_key or os.getenv("GEMINI_API_KEY") or DEFAULT_GEMINI_KEY or os.getenv("OPENROUTER_API_KEY") or DEFAULT_OPENROUTER_KEY
 
     if key and key.strip():
         clean_key = key.strip()
