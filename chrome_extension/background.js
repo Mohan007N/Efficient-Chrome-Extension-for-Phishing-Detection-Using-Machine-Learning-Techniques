@@ -82,59 +82,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             message: `Do NOT enter credentials on this page!${indicatorSummary}`,
             priority: 2,
           });
-
-          // Fire async XAI deep-analysis notification via /explain endpoint
-          (async () => {
-            try {
-              const stored = await chrome.storage.local.get("gemini_api_key");
-              const apiKey = stored.gemini_api_key || "";
-              let hostname = "";
-              try { hostname = new URL(pageUrl).hostname; } catch (_) {}
-
-              const explainPayload = {
-                url: pageUrl,
-                hostname: hostname,
-                is_phishing: true,
-                risk_level: result.risk_level || "HIGH",
-                phishing_probability: result.phishing_probability || 0.95,
-                features: features || {},
-                gemini_api_key: apiKey,
-              };
-
-              const explainResult = await callExplainAPI(explainPayload);
-              if (explainResult && explainResult.explanation) {
-                // Extract a concise summary from the AI explanation for the notification
-                const rawExplanation = explainResult.explanation;
-                // Strip markdown formatting for plain-text notification
-                const plainText = rawExplanation
-                  .replace(/#{1,3}\s*/g, "")
-                  .replace(/\*\*(.*?)\*\*/g, "$1")
-                  .replace(/\*(.*?)\*/g, "$1")
-                  .replace(/```[\s\S]*?```/g, "")
-                  .trim();
-                // Truncate to fit OS notification limits (~250 chars)
-                const truncated = plainText.length > 280
-                  ? plainText.substring(0, 277) + "..."
-                  : plainText;
-
-                const sourceName = explainResult.source === "openrouter_gemini" || explainResult.source === "openrouter_direct"
-                  ? "OpenRouter Gemini"
-                  : explainResult.source === "gemini" || explainResult.source === "gemini_direct"
-                    ? "Google Gemini AI"
-                    : "Rule-Based XAI";
-
-                chrome.notifications.create(`xai_${tabId}_${Date.now()}`, {
-                  type: "basic",
-                  iconUrl: "icons/icon128.png",
-                  title: `✨ XAI Threat Briefing [${sourceName}]`,
-                  message: truncated,
-                  priority: 2,
-                });
-              }
-            } catch (e) {
-              console.warn("[Background] XAI notification follow-up failed:", e);
-            }
-          })();
         } else {
           // Safe page — brief XAI confirmation notification
           const legitPct = Math.round((result.legitimate_probability || (1 - result.phishing_probability) || 0) * 100);

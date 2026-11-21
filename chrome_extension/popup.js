@@ -67,6 +67,15 @@ const xaiKeyHintText   = document.getElementById("xaiKeyHintText");
 const copyBriefingBtn  = document.getElementById("copyBriefingBtn");
 const footerModel      = document.getElementById("footerModel");
 
+// On-demand XAI elements
+const xaiTriggerBox       = document.getElementById("xaiTriggerBox");
+const xaiTriggerTitle     = document.getElementById("xaiTriggerTitle");
+const xaiTriggerSub       = document.getElementById("xaiTriggerSub");
+const generateXaiBtn      = document.getElementById("generateXaiBtn");
+const generateXaiBtnText  = document.getElementById("generateXaiBtnText");
+const generateXaiIcon     = document.getElementById("generateXaiIcon");
+const briefingBox         = document.getElementById("briefingBox");
+
 // Telemetry grids
 const telGridDomain   = document.getElementById("telGridDomain");
 const telGridAuth     = document.getElementById("telGridAuth");
@@ -548,8 +557,8 @@ function setupXAI(data) {
 
   if (xaiCardTitleText) {
     xaiCardTitleText.textContent = data.is_phishing
-      ? "Explainable AI Threat Analysis"
-      : "Explainable AI Safety Assessment";
+      ? "Heuristic Red Flags & AI Analysis"
+      : "Security Signals & AI Assessment";
   }
 
   if (xaiSectionTitle) {
@@ -576,43 +585,63 @@ function setupXAI(data) {
       .join("");
   }
 
-  loadXAIAnalysis();
+  // Set on-demand trigger card (Do NOT run automatically)
+  if (xaiTriggerBox) xaiTriggerBox.style.display = "flex";
+  if (briefingBox) briefingBox.style.display = "none";
+
+  if (xaiTriggerTitle) {
+    xaiTriggerTitle.textContent = data.is_phishing
+      ? "Explainable AI Threat Analysis"
+      : "Explainable AI Safety Assessment";
+  }
+
+  if (xaiTriggerSub) {
+    xaiTriggerSub.textContent = data.is_phishing
+      ? "Click to synthesize deep incident reasoning and threat breakdown."
+      : "Click to generate a verification breakdown explaining why this page is safe.";
+  }
+
+  if (generateXaiBtn && generateXaiBtnText) {
+    generateXaiBtn.disabled = false;
+    generateXaiBtnText.textContent = data.is_phishing ? "Explain Threat with AI" : "Explain Safety with AI";
+
+    generateXaiBtn.onclick = () => {
+      generateXaiBtn.disabled = true;
+      generateXaiBtnText.textContent = "Synthesizing…";
+      loadXAIAnalysis();
+    };
+  }
 }
 
 async function loadXAIAnalysis(overrideKey = null) {
   if (!currentTabData) return;
 
+  // Reveal the briefing card with loading spinner
+  if (xaiTriggerBox) xaiTriggerBox.style.display = "none";
+  if (briefingBox) briefingBox.style.display = "block";
+
   if (xaiText) {
     xaiText.innerHTML = `
       <div class="xai-loading-msg">
         <span class="spinner-sm"></span>
-        <span>Generating ${currentTabData.is_phishing ? 'threat reasoning' : 'safety assessment'}…</span>
+        <span>Synthesizing ${currentTabData.is_phishing ? 'incident threat reasoning' : 'safety verification'}…</span>
       </div>
     `;
   }
   if (xaiSourceBadge) {
     xaiSourceBadge.textContent = "Analyzing…";
-    xaiSourceBadge.className = "xai-source-badge";
+    xaiSourceBadge.className = "source-tag source-ai";
   }
 
   const stored = await store.get("gemini_api_key");
   const apiKey = overrideKey || stored.gemini_api_key || "";
 
   if (xaiKeyHint) {
-    if (!apiKey) {
-      xaiKeyHint.style.display = "flex";
-      if (xaiKeyHintText) {
-        xaiKeyHintText.textContent = "Add your free Gemini API key in Settings for live neural explanations";
-      }
-    } else {
-      xaiKeyHint.style.display = "none";
-    }
+    xaiKeyHint.style.display = "none";
   }
 
   if (footerModel) {
-    footerModel.textContent = apiKey
-      ? (apiKey.startsWith("sk-or-") ? "XGBoost + OpenRouter" : "XGBoost + Gemini AI")
-      : "XGBoost + Rule Engine";
+    footerModel.textContent = "AI Shield Engine Active";
   }
 
   // If in Chrome extension environment, communicate with background service worker
@@ -645,16 +674,16 @@ async function loadXAIAnalysis(overrideKey = null) {
 
       if (xaiSourceBadge) {
         if (res.source === "openrouter_gemini" || res.source === "openrouter_direct") {
-          xaiSourceBadge.textContent = "OpenRouter Gemini";
+          xaiSourceBadge.textContent = "✨ OpenRouter AI";
           xaiSourceBadge.className = "xai-source-badge source-ai";
         } else if (res.source === "gemini" || res.source === "gemini_direct") {
-          xaiSourceBadge.textContent = "Google Gemini";
+          xaiSourceBadge.textContent = "✨ Gemini AI";
           xaiSourceBadge.className = "xai-source-badge source-ai";
         } else if (res.source === "rule_based_fallback") {
-          xaiSourceBadge.textContent = "Rule Fallback";
+          xaiSourceBadge.textContent = "Security Heuristics";
           xaiSourceBadge.className = "xai-source-badge source-offline";
         } else {
-          xaiSourceBadge.textContent = "Rule Engine";
+          xaiSourceBadge.textContent = "Security Heuristics";
           xaiSourceBadge.className = "xai-source-badge source-rule";
         }
       }

@@ -233,22 +233,21 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // In-Page Banner — clean, minimal, professional
+  // In-Page Security Notifications — Ultra-clean, non-intrusive, professional
   // ─────────────────────────────────────────────────────────────────────────────
 
   const BANNER_ID = "__phishguard_banner__";
-
   let autoDismissTimer = null;
 
   function formatXAIMarkdown(text) {
     if (!text) return "";
     return text
-      .replace(/^### (.*$)/gim, '<div style="font-size:12px; font-weight:700; color:#fff; margin:8px 0 3px 0;">$1</div>')
-      .replace(/^## (.*$)/gim, '<div style="font-size:13px; font-weight:700; color:#fff; margin:10px 0 4px 0;">$1</div>')
-      .replace(/^# (.*$)/gim, '<div style="font-size:14px; font-weight:700; color:#fff; margin:12px 0 5px 0;">$1</div>')
-      .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#fff;">$1</strong>')
-      .replace(/\*(.*?)\*/gim, '<em style="color:#ccc;">$1</em>')
-      .replace(/^- (.*$)/gim, '<div style="margin:3px 0 3px 6px; display:flex; gap:6px; line-height:1.45;"><span style="color:#ff6b6b; flex-shrink:0;">•</span><span>$1</span></div>')
+      .replace(/^### (.*$)/gim, '<div style="font-size:12px; font-weight:700; color:#f1f5f9; margin:8px 0 3px 0;">$1</div>')
+      .replace(/^## (.*$)/gim, '<div style="font-size:13px; font-weight:700; color:#f1f5f9; margin:10px 0 4px 0;">$1</div>')
+      .replace(/^# (.*$)/gim, '<div style="font-size:14px; font-weight:700; color:#f1f5f9; margin:12px 0 5px 0;">$1</div>')
+      .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#ffffff;">$1</strong>')
+      .replace(/\*(.*?)\*/gim, '<em style="color:#94a3b8;">$1</em>')
+      .replace(/^- (.*$)/gim, '<div style="margin:3px 0 3px 6px; display:flex; gap:6px; line-height:1.45;"><span style="color:#f43f5e; flex-shrink:0;">•</span><span>$1</span></div>')
       .replace(/\n\n/g, '<div style="height:6px;"></div>')
       .replace(/\n/g, '<br/>');
   }
@@ -258,172 +257,204 @@
     if (existing) existing.remove();
     if (autoDismissTimer) clearTimeout(autoDismissTimer);
 
-    const isPhishing = data.is_phishing;
-    const pct        = Math.round((data.phishing_probability || 0) * 100);
-    const legitPct   = Math.round((data.legitimate_probability || 0) * 100);
-    const risk       = (data.risk_level || "HIGH").toUpperCase();
+    const isPhishing  = Boolean(data.is_phishing);
+    const pct         = Math.round((data.phishing_probability || 0) * 100);
+    const legitPct    = Math.round((data.legitimate_probability || (1 - (data.phishing_probability || 0))) * 100);
+    const risk        = (data.risk_level || "HIGH").toUpperCase();
     const isWhitelist = data.whitelisted === true;
 
-    // Color scheme
-    const C = isPhishing
-      ? { bg: "#0e0505", border: "#3d1212", accent: "#ff453a", sub: "#c97e7e", chipBg: "rgba(255,69,58,0.15)", chipBdr: "rgba(255,69,58,0.3)" }
-      : { bg: "#040e06", border: "#0e3018", accent: "#30d158", sub: "#6eaa80", chipBg: "rgba(48,209,88,0.12)",  chipBdr: "rgba(48,209,88,0.25)" };
-
     const banner = document.createElement("div");
-    banner.id    = BANNER_ID;
+    banner.id = BANNER_ID;
+
+    // ── Safe Page: Discreet Floating Toast (Auto-Dismisses) ──
+    if (!isPhishing) {
+      banner.style.cssText = `
+        position: fixed !important;
+        top: 16px !important;
+        right: 18px !important;
+        z-index: 2147483647 !important;
+        font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif !important;
+        background: rgba(10, 14, 23, 0.94) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border: 1px solid rgba(16, 185, 129, 0.3) !important;
+        border-radius: 9999px !important;
+        padding: 7px 14px 7px 10px !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 16px rgba(16, 185, 129, 0.1) !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 9px !important;
+        transform: translateY(-20px) scale(0.96) !important;
+        opacity: 0 !important;
+        transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        pointer-events: auto !important;
+        box-sizing: border-box !important;
+        color: #f1f5f9 !important;
+      `;
+
+      banner.innerHTML = `
+        <div style="
+          width: 22px; height: 22px; border-radius: 50%;
+          background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35);
+          display: flex; align-items: center; justify-content: center;
+          color: #10b981; font-size: 11px; flex-shrink: 0; font-weight: 700;
+        ">✓</div>
+        <div style="display: flex; flex-direction: column; line-height: 1.2;">
+          <div style="font-size: 11.5px; font-weight: 600; color: #f1f5f9; display: flex; align-items: center; gap: 5px;">
+            <span>${isWhitelist ? 'Trusted Domain' : 'Verified Legitimate'}</span>
+            <span style="font-size: 9px; color: #10b981; font-weight: 700; background: rgba(16, 185, 129, 0.15); padding: 1px 5px; border-radius: 999px;">${legitPct}% SAFE</span>
+          </div>
+          <div style="font-size: 10px; color: #94a3b8; margin-top: 1px;">No credential harvesting traps</div>
+        </div>
+        <button id="__pg_toast_close__" style="
+          background: transparent; border: none; color: #64748b;
+          cursor: pointer; padding: 2px 4px; font-size: 12px;
+          margin-left: 4px; display: flex; align-items: center; transition: color 0.15s;
+        " title="Dismiss">✕</button>
+      `;
+
+      document.documentElement.appendChild(banner);
+
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        banner.style.transform = "translateY(0) scale(1)";
+        banner.style.opacity = "1";
+      }));
+
+      function removeToast() {
+        banner.style.transform = "translateY(-16px) scale(0.96)";
+        banner.style.opacity = "0";
+        setTimeout(() => { if (banner.parentNode) banner.remove(); }, 300);
+      }
+
+      const closeBtn = banner.querySelector("#__pg_toast_close__");
+      if (closeBtn) closeBtn.addEventListener("click", removeToast);
+      autoDismissTimer = setTimeout(removeToast, 4000);
+      return;
+    }
+
+    // ── Phishing Page: Authoritative Security Warning Banner ──
     banner.style.cssText = `
       position: fixed !important;
       top: 0 !important; left: 0 !important; right: 0 !important;
       width: 100% !important;
       z-index: 2147483647 !important;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-      transform: translateY(-110%) !important;
-      transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1) !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif !important;
+      transform: translateY(-100%) !important;
+      transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1) !important;
       box-sizing: border-box !important;
+      background: #0d111a !important;
+      color: #f1f5f9 !important;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7) !important;
     `;
-
-    const label = isPhishing
-      ? `Phishing detected &nbsp;·&nbsp; ${risk} Risk`
-      : (isWhitelist ? "Trusted domain verified" : "Page verified safe");
-
-    const subLabel = isPhishing
-      ? `${pct}% phishing confidence &nbsp;·&nbsp; Do <strong>not</strong> enter credentials`
-      : `${legitPct}% legitimate confidence &nbsp;·&nbsp; No threats detected`;
-
-    const icon = isPhishing ? "!" : "✓";
 
     banner.innerHTML = `
       <style>
         @keyframes pgSpin { to { transform: rotate(360deg); } }
-        @keyframes pgPulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
-        #__pg_ask_ai_btn__:hover { filter: brightness(1.15) !important; transform: scale(1.01); }
+        #__pg_leave_btn__:hover { filter: brightness(1.15) !important; }
+        #__pg_toggle_btn__:hover { background: rgba(255,255,255,0.12) !important; }
       </style>
+
       <div style="
-        background:${C.bg}; border-bottom:1px solid ${C.border};
-        box-shadow:0 6px 24px rgba(0,0,0,0.5);
-        display:flex; align-items:center; justify-content:space-between;
-        gap:12px; padding:9px 18px; box-sizing:border-box; width:100%;
+        background: linear-gradient(180deg, #180d12 0%, #0d111a 100%);
+        border-bottom: 1px solid rgba(244, 63, 94, 0.35);
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 14px; padding: 10px 20px; box-sizing: border-box; width: 100%;
       ">
-        <div style="display:flex; align-items:center; gap:11px; flex:1; min-width:0;">
+        <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
           <div style="
-            width:28px; height:28px; border-radius:50%; flex-shrink:0;
-            background:${C.chipBg}; border:1px solid ${C.chipBdr};
-            display:flex; align-items:center; justify-content:center;
-            font-size:13px; font-weight:700; color:${C.accent};
-          ">${icon}</div>
-          <div style="min-width:0;">
+            width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+            background: rgba(244, 63, 94, 0.15); border: 1px solid rgba(244, 63, 94, 0.4);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px; font-weight: 800; color: #f43f5e;
+            box-shadow: 0 0 14px rgba(244, 63, 94, 0.2);
+          ">!</div>
+
+          <div style="min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 7px; flex-wrap: wrap;">
+              <span style="font-size: 13.5px; font-weight: 700; color: #ffffff; letter-spacing: -0.15px;">
+                Phishing Threat Detected
+              </span>
+              <span style="
+                font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+                background: rgba(244, 63, 94, 0.18); border: 1px solid rgba(244, 63, 94, 0.4);
+                color: #f43f5e; padding: 1px 7px; border-radius: 9999px;
+              ">${risk} RISK · ${pct}%</span>
+            </div>
             <div style="
-              font-size:13px; font-weight:600; color:${C.accent};
-              letter-spacing:-0.1px; line-height:1.3;
-              white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-            ">${label}</div>
-            <div style="
-              font-size:11px; color:${C.sub}; margin-top:1px;
-              white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-            ">${subLabel}</div>
+              font-size: 11.5px; color: #cbd5e1; margin-top: 2px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            ">
+              This page mimics an authentic service to harvest passwords or sensitive data. Do <strong>not</strong> enter credentials.
+            </div>
           </div>
         </div>
 
-        <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-          <div style="
-            background:${C.chipBg}; border:1px solid ${C.chipBdr};
-            color:${C.accent}; font-size:10px; font-weight:600;
-            letter-spacing:0.4px; padding:2px 8px; border-radius:999px;
-          ">PhishGuard</div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button id="__pg_leave_btn__" style="
+            background: #e11d48; border: none; border-radius: 6px;
+            color: #ffffff; font-size: 12px; font-weight: 600;
+            padding: 6px 14px; cursor: pointer; transition: all 0.15s ease;
+            box-shadow: 0 2px 8px rgba(225, 29, 72, 0.35);
+          ">Leave Site</button>
+
+          <button id="__pg_toggle_btn__" style="
+            background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 6px; color: #e2e8f0; font-size: 12px; font-weight: 500;
+            padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 5px;
+            transition: all 0.15s ease;
+          ">
+            <span>Explainable AI</span>
+            <span id="__pg_chevron__" style="font-size: 9px; transition: transform 0.2s;">▼</span>
+          </button>
 
           <button id="__pg_dismiss__" style="
-            background:transparent; border:1px solid rgba(255,255,255,0.1);
-            color:rgba(255,255,255,0.35); cursor:pointer;
-            width:22px; height:22px; border-radius:5px;
-            display:flex; align-items:center; justify-content:center;
-            font-size:12px; line-height:1;
+            background: transparent; border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #94a3b8; cursor: pointer; width: 26px; height: 26px; border-radius: 6px;
+            display: flex; align-items: center; justify-content: center; font-size: 12px;
+            transition: all 0.15s ease;
           " title="Dismiss">✕</button>
         </div>
       </div>
-      <div style="height:2px; background:linear-gradient(90deg, ${C.accent} ${isPhishing ? pct : legitPct}%, rgba(255,255,255,0.04) ${isPhishing ? pct : legitPct}%);"></div>
 
-      <!-- ══════ BIG ASK AI BUTTON — Full Width ══════ -->
-      <div style="background:${C.bg}; padding:8px 18px 10px 18px; border-bottom:1px solid ${C.border};">
-        <button id="__pg_ask_ai_btn__" style="
-          width: 100%;
-          padding: 10px 16px;
-          background: linear-gradient(135deg, ${isPhishing ? '#ff453a' : '#30d158'} 0%, ${isPhishing ? '#d63030' : '#28a847'} 100%);
-          border: none;
-          border-radius: 8px;
-          color: #fff;
-          font-size: 14px;
-          font-weight: 700;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          transition: all 0.2s ease;
-          box-shadow: 0 4px 14px ${isPhishing ? 'rgba(255,69,58,0.35)' : 'rgba(48,209,88,0.3)'};
-          letter-spacing: 0.2px;
-        " title="Get Explainable AI analysis of this page">
-          <span style="font-size:18px;">🤖</span>
-          <span id="__pg_ask_ai_label__">${isPhishing ? 'Ask AI — Why is this dangerous?' : 'Ask AI — Why is this safe?'}</span>
-          <span id="__pg_drawer_chevron__" style="font-size:11px; transition: transform 0.25s;">▼</span>
-        </button>
-      </div>
+      <!-- Accent progress hairline -->
+      <div style="height: 2px; background: linear-gradient(90deg, #f43f5e ${pct}%, rgba(255,255,255,0.06) ${pct}%);"></div>
 
-      <!-- ── Explainable AI (XAI) Panel ── -->
+      <!-- ── Explainable AI (XAI) Expandable Drawer ── -->
       <div id="__pg_explain_drawer__" style="
         display: none;
-        background: #111115;
-        border-bottom: 1px solid rgba(255,255,255,0.12);
-        box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+        background: #090d16;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         padding: 14px 20px 16px 20px;
-        color: #e5e5eb;
+        color: #cbd5e1;
         font-size: 12px;
-        max-height: 440px;
+        max-height: 400px;
         overflow-y: auto;
         box-sizing: border-box;
       ">
-        <!-- Section 1: Detected Indicators / Feature Attribution -->
+        <!-- Section 1: Detected Red Flags -->
         <div style="margin-bottom: 12px;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: ${C.accent}; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
-            <span>${isPhishing ? '🚨 Detected Red Flags & Technical Indicators' : '🛡️ Verified Security Indicators'}</span>
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #f43f5e; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
+            <span>🚨 Detected Technical Red Flags</span>
           </div>
           <div id="__pg_indicators_list__" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
         </div>
 
-        <!-- Section 2: AI Analysis Box -->
-        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: #fff;">
+        <!-- Section 2: AI Incident Analysis -->
+        <div style="background: #0e1422; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 12px 14px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11.5px; color: #ffffff;">
               <span style="font-size: 13px;">✨</span>
-              <span>Explainable AI (XAI) Security Analysis</span>
+              <span>Explainable AI Incident Briefing</span>
             </div>
-            <div id="__pg_ai_source_badge__" style="font-size: 10px; padding: 2px 7px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #8e8e99;">
-              Connecting...
-            </div>
-          </div>
-          <div id="__pg_ai_content__" style="line-height: 1.5; color: #d0d0d8; font-size: 12px;">
-            <div style="display:flex; align-items:center; gap:8px; color:#888;">
-              <span style="display:inline-block; width:12px; height:12px; border:2px solid #666; border-top-color:#fff; border-radius:50%; animation:pgSpin 0.8s linear infinite;"></span>
-              <span>Consulting AI security engine...</span>
+            <div id="__pg_ai_source_badge__" style="font-size: 9.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25);">
+              AI Shield Engine
             </div>
           </div>
-        </div>
-
-        <!-- Section 3: API Key Management -->
-        <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.07); font-size: 11px;">
-          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 250px;">
-            <span style="color: #999; flex-shrink: 0;">🔑 Gemini API Key:</span>
-            <input type="password" id="__pg_key_input__" placeholder="Enter Google Gemini API key..." style="
-              background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.18); border-radius: 5px;
-              padding: 5px 9px; color: #fff; font-size: 11px; flex: 1; outline: none;
-            " />
-            <button id="__pg_save_key_btn__" style="
-              background: #0a84ff; border: none; border-radius: 5px; color: #fff; font-size: 11px;
-              font-weight: 600; padding: 5px 11px; cursor: pointer; white-space: nowrap; transition: opacity 0.2s;
-            ">Save & Analyze</button>
-          </div>
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <span id="__pg_key_status__" style="color: #888; font-size: 10px;"></span>
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #58a6ff; text-decoration: none; font-size: 10px;">Get Free Key ↗</a>
+          <div id="__pg_ai_content__" style="line-height: 1.55; color: #cbd5e1; font-size: 11.5px;">
+            <div style="display:flex; align-items:center; gap:8px; color:#8293a9;">
+              <span style="display:inline-block; width:12px; height:12px; border:2px solid #55657b; border-top-color:#38bdf8; border-radius:50%; animation:pgSpin 0.8s linear infinite;"></span>
+              <span>Synthesizing incident response briefing...</span>
+            </div>
           </div>
         </div>
       </div>
@@ -438,168 +469,99 @@
 
     function slideOut() {
       banner.style.transform = "translateY(-110%)";
-      setTimeout(() => { if (banner.parentNode) banner.remove(); }, 380);
+      setTimeout(() => { if (banner.parentNode) banner.remove(); }, 320);
     }
 
     const dismissBtn = banner.querySelector("#__pg_dismiss__");
     if (dismissBtn) {
       dismissBtn.addEventListener("click", slideOut);
-      dismissBtn.addEventListener("mouseenter", () => {
-        dismissBtn.style.color = "rgba(255,255,255,0.8)";
-        dismissBtn.style.borderColor = "rgba(255,255,255,0.3)";
-      });
-      dismissBtn.addEventListener("mouseleave", () => {
-        dismissBtn.style.color = "rgba(255,255,255,0.35)";
-        dismissBtn.style.borderColor = "rgba(255,255,255,0.1)";
-      });
     }
 
-    // Auto dismiss for safe banners
-    if (!isPhishing) {
-      autoDismissTimer = setTimeout(slideOut, 5000);
+    // Leave Site action
+    const leaveBtn = banner.querySelector("#__pg_leave_btn__");
+    if (leaveBtn) {
+      leaveBtn.addEventListener("click", () => {
+        if (window.history.length > 1) {
+          window.history.back();
+        } else {
+          window.location.href = "https://www.google.com";
+        }
+      });
     }
-
-    // ── Explainable AI Drawer Toggle & Logic ──
-    const drawer       = banner.querySelector("#__pg_explain_drawer__");
-    const chevron      = banner.querySelector("#__pg_drawer_chevron__");
-    const indList      = banner.querySelector("#__pg_indicators_list__");
-    const aiContent    = banner.querySelector("#__pg_ai_content__");
-    const aiBadge      = banner.querySelector("#__pg_ai_source_badge__");
-    const keyInput     = banner.querySelector("#__pg_key_input__");
-    const saveKeyBtn   = banner.querySelector("#__pg_save_key_btn__");
-    const keyStatus    = banner.querySelector("#__pg_key_status__");
 
     // Populate top indicators
+    const indList   = banner.querySelector("#__pg_indicators_list__");
     const indicators = data.top_indicators && data.top_indicators.length
       ? data.top_indicators
-      : (isPhishing ? ["Structural similarity with credential harvesting templates.", "High confidence ML phishing signature."] : ["No security anomalies detected."]);
+      : ["Structural match with known credential-theft pages.", "High-confidence anomalous feature distribution."];
 
     indList.innerHTML = indicators.map(ind => `
       <div style="
-        background: ${isPhishing ? 'rgba(255,69,58,0.1)' : 'rgba(48,209,88,0.1)'};
-        border: 1px solid ${isPhishing ? 'rgba(255,69,58,0.25)' : 'rgba(48,209,88,0.2)'};
-        color: ${isPhishing ? '#ff8580' : '#85e89d'};
-        padding: 3px 8px; border-radius: 4px; font-size: 11px;
+        background: rgba(244, 63, 94, 0.08);
+        border: 1px solid rgba(244, 63, 94, 0.22);
+        color: #fca5a5;
+        padding: 3px 8px; border-radius: 5px; font-size: 10.5px;
       ">• ${ind}</div>
     `).join("");
 
+    const drawer    = banner.querySelector("#__pg_explain_drawer__");
+    const chevron   = banner.querySelector("#__pg_chevron__");
+    const aiContent = banner.querySelector("#__pg_ai_content__");
+    const aiBadge   = banner.querySelector("#__pg_ai_source_badge__");
+
     let drawerOpen = false;
-    let explanationFetched = false;
+    let explanationLoaded = false;
+    drawer.style.display = "none";
+    chevron.style.transform = "rotate(0deg)";
 
-
-
-    function refreshKeyUI() {
-      chrome.storage.local.get("gemini_api_key", (stored) => {
-        if (stored.gemini_api_key) {
-          keyInput.placeholder = "•••••••••••••••• (Custom Key)";
-          keyStatus.innerHTML = '<span style="color:#30d158;">● API Key Active</span>';
-        } else {
-          keyInput.placeholder = "Enter your OpenRouter or Gemini API key";
-          keyStatus.innerHTML = '<span style="color:#888;">● No API key — using rule-based analysis</span>';
-        }
-      });
-    }
-
-    async function loadExplanation(overrideKey = null) {
-      aiContent.innerHTML = `
-        <div style="display:flex; align-items:center; gap:8px; color:#aaa;">
-          <span style="display:inline-block; width:12px; height:12px; border:2px solid #666; border-top-color:#fff; border-radius:50%; animation:pgSpin 0.8s linear infinite;"></span>
-          <span>Generating AI security analysis...</span>
-        </div>
-      `;
-      aiBadge.textContent = "Analyzing...";
-      aiBadge.style.background = "rgba(10,132,255,0.2)";
-      aiBadge.style.color = "#58a6ff";
-
-      const stored = await chrome.storage.local.get("gemini_api_key");
-      const apiKey = overrideKey || stored.gemini_api_key || "";
-
-      chrome.runtime.sendMessage({
-        type: "EXPLAIN_URL",
-        url: data.url || window.location.href,
-        hostname: window.location.hostname,
-        is_phishing: data.is_phishing,
-        risk_level: data.risk_level,
-        phishing_probability: data.phishing_probability,
-        features: data.features || {},
-        gemini_api_key: apiKey,
-      }, (res) => {
-        if (!res || res.error) {
-          aiBadge.textContent = "Offline Fallback";
-          aiBadge.style.background = "rgba(255,159,10,0.18)";
-          aiBadge.style.color = "#ff9f0a";
-          aiContent.innerHTML = formatXAIMarkdown(res?.explanation || `Analysis complete. High phishing indicators detected for ${window.location.hostname}.`);
-          return;
-        }
-
-        if (res.source === "openrouter_gemini" || res.source === "openrouter_direct") {
-          aiBadge.textContent = "✨ OpenRouter Gemini Flash";
-          aiBadge.style.background = "rgba(48,209,88,0.18)";
-          aiBadge.style.color = "#30d158";
-        } else if (res.source === "gemini" || res.source === "gemini_direct") {
-          aiBadge.textContent = "✨ Google Gemini AI";
-          aiBadge.style.background = "rgba(48,209,88,0.18)";
-          aiBadge.style.color = "#30d158";
-        } else {
-          aiBadge.textContent = "Rule-Based Attribution";
-          aiBadge.style.background = "rgba(255,255,255,0.1)";
-          aiBadge.style.color = "#aaa";
-        }
-
-        aiContent.innerHTML = formatXAIMarkdown(res.explanation);
-        explanationFetched = true;
-      });
-    }
-
-    // ── Auto-open XAI drawer for phishing detections ──
-    if (isPhishing) {
-      drawerOpen = true;
-      drawer.style.display = "block";
-      chevron.style.transform = "rotate(180deg)";
-      const askLabel = banner.querySelector("#__pg_ask_ai_label__");
-      if (askLabel) askLabel.textContent = isPhishing ? "🤖 AI Analysis — Threat Breakdown" : "🤖 AI Analysis — Safety Report";
-      refreshKeyUI();
-      loadExplanation();
-    }
-
-    const askAiBtn = banner.querySelector("#__pg_ask_ai_btn__");
-    askAiBtn.addEventListener("click", () => {
+    const toggleBtn = banner.querySelector("#__pg_toggle_btn__");
+    toggleBtn.addEventListener("click", () => {
       drawerOpen = !drawerOpen;
-      const askLabel = banner.querySelector("#__pg_ask_ai_label__");
-      if (drawerOpen) {
-        if (autoDismissTimer) clearTimeout(autoDismissTimer);
-        drawer.style.display = "block";
-        chevron.style.transform = "rotate(180deg)";
-        if (askLabel) askLabel.textContent = isPhishing ? "🤖 AI Analysis — Threat Breakdown" : "🤖 AI Analysis — Safety Report";
-        refreshKeyUI();
-        if (!explanationFetched) {
-          loadExplanation();
-        }
-      } else {
-        drawer.style.display = "none";
-        chevron.style.transform = "rotate(0deg)";
-        if (askLabel) askLabel.textContent = isPhishing ? "Ask AI — Why is this dangerous?" : "Ask AI — Why is this safe?";
-      }
-    });
+      drawer.style.display = drawerOpen ? "block" : "none";
+      chevron.style.transform = drawerOpen ? "rotate(180deg)" : "rotate(0deg)";
 
-    saveKeyBtn.addEventListener("click", () => {
-      const val = keyInput.value.trim();
-      if (!val) {
-        keyStatus.innerHTML = '<span style="color:#ff453a;">Please enter a valid key</span>';
-        return;
+      // Fetch on-demand only when user expands
+      if (drawerOpen && !explanationLoaded) {
+        aiContent.innerHTML = `
+          <div style="display:flex; align-items:center; gap:8px; color:#8293a9;">
+            <span style="display:inline-block; width:12px; height:12px; border:2px solid #55657b; border-top-color:#38bdf8; border-radius:50%; animation:pgSpin 0.8s linear infinite;"></span>
+            <span>Synthesizing incident response briefing...</span>
+          </div>
+        `;
+
+        chrome.runtime.sendMessage({
+          type: "EXPLAIN_URL",
+          url: data.url || window.location.href,
+          hostname: window.location.hostname,
+          is_phishing: true,
+          risk_level: data.risk_level,
+          phishing_probability: data.phishing_probability,
+          features: data.features || {},
+        }, (res) => {
+          explanationLoaded = true;
+          if (!res || res.error) {
+            aiBadge.textContent = "Security Heuristics";
+            aiBadge.style.background = "rgba(245, 158, 11, 0.12)";
+            aiBadge.style.color = "#f59e0b";
+            aiBadge.style.borderColor = "rgba(245, 158, 11, 0.25)";
+            aiContent.innerHTML = formatXAIMarkdown(res?.explanation || `Critical threat indicators detected on ${window.location.hostname}. Please close this window.`);
+            return;
+          }
+
+          if (res.source === "openrouter_gemini" || res.source === "openrouter_direct") {
+            aiBadge.textContent = "✨ OpenRouter AI";
+          } else if (res.source === "gemini" || res.source === "gemini_direct") {
+            aiBadge.textContent = "✨ Gemini AI";
+          } else {
+            aiBadge.textContent = "Security Heuristics";
+            aiBadge.style.background = "rgba(255, 255, 255, 0.08)";
+            aiBadge.style.color = "#94a3b8";
+            aiBadge.style.borderColor = "rgba(255, 255, 255, 0.12)";
+          }
+
+          aiContent.innerHTML = formatXAIMarkdown(res.explanation);
+        });
       }
-      saveKeyBtn.textContent = "Saving...";
-      saveKeyBtn.style.opacity = "0.7";
-      chrome.storage.local.set({ gemini_api_key: val }, () => {
-        saveKeyBtn.textContent = "Saved!";
-        keyInput.value = "";
-        refreshKeyUI();
-        loadExplanation(val);
-        setTimeout(() => {
-          saveKeyBtn.textContent = "Save & Analyze";
-          saveKeyBtn.style.opacity = "1";
-        }, 1500);
-      });
     });
   }
 

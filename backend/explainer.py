@@ -171,10 +171,8 @@ def call_openrouter_gemini(prompt: str, api_key: str) -> str:
     """
     models = [
         "google/gemini-2.5-flash",
-        "google/gemini-3.8-flash",
-        "google/gemini-3.7-flash",
-        "google/gemini-3.5-flash",
         "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-pro",
     ]
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
@@ -234,9 +232,9 @@ def call_google_gemini_direct(prompt: str, api_key: str) -> str:
     """
     # Fast, high-availability models placed first to avoid timeouts and high-traffic 503 errors
     models = [
-        "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
-        "gemini-3.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
     ]
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -289,7 +287,13 @@ def generate_explanation(
     Uses Google Gemini API or OpenRouter Gemini Flash; falls back to rule-based XAI if unavailable.
     """
     indicators = extract_top_indicators(features_dict, is_phishing, risk_level)
-    key = api_key or os.getenv("GEMINI_API_KEY") or DEFAULT_GEMINI_KEY or os.getenv("OPENROUTER_API_KEY") or DEFAULT_OPENROUTER_KEY
+    key = (
+        api_key
+        or os.getenv("OPENROUTER_API_KEY")
+        or DEFAULT_OPENROUTER_KEY
+        or os.getenv("GEMINI_API_KEY")
+        or DEFAULT_GEMINI_KEY
+    )
 
     if key and key.strip():
         clean_key = key.strip()
