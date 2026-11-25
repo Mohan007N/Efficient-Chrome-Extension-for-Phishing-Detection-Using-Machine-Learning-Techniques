@@ -3,7 +3,7 @@ backend/explainer.py — Explainable AI (XAI) Engine for Phishing Detection
 
 Provides human-interpretable explanations of why a webpage was flagged as phishing:
 1. Feature-attribution rule engine: Extracts top technical red flags from 48 ML features.
-2. OpenRouter & Google Gemini Flash integration: Uses generative AI to produce deep,
+2. Groq AI integration: Uses ultra-fast Groq inference to produce concise,
    natural-language incident-response briefings for the end user.
 """
 
@@ -15,12 +15,11 @@ import urllib.error
 import sys
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging.getLogger("PhishingAPI.Explainer")
 
-DEFAULT_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
-DEFAULT_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 
 SUSPICIOUS_TLDS = {
     "xyz", "top", "work", "tk", "ml", "cf", "gq", "ga", "buzz", "cc",
@@ -165,21 +164,19 @@ Provide a concise Explainable AI (XAI) safety briefing for the user with the fol
 Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 120 words."""
 
 
-def call_openrouter_gemini(prompt: str, api_key: str) -> str:
+def call_groq_ai(prompt: str, api_key: str) -> str:
     """
-    Calls OpenRouter using Gemini Flash models with max_tokens set appropriately.
+    Calls Groq's OpenAI-compatible Chat Completions endpoint using fast available models.
     """
     models = [
-        "google/gemini-2.5-flash",
-        "google/gemini-2.5-flash-lite",
-        "google/gemini-2.5-pro",
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
     ]
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
         "User-Agent": "PhishGuard-AI/1.0",
-        "HTTP-Referer": "http://127.0.0.1:8000",
-        "X-Title": "AI Phishing Shield",
     }
 
     last_error = None
@@ -197,80 +194,41 @@ def call_openrouter_gemini(prompt: str, api_key: str) -> str:
                 },
             ],
             "temperature": 0.2,
-            "max_tokens": 350,
+            "max_tokens": 1024,
         }
+        if "gpt-oss" in model:
+            payload["reasoning_effort"] = "low"
+
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=data, headers=headers, method="POST")
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=data,
+            headers=headers,
+            method="POST",
+        )
 
         try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 resp_json = json.loads(resp.read().decode("utf-8"))
                 choices = resp_json.get("choices", [])
                 if choices:
                     content = choices[0].get("message", {}).get("content", "")
-                    if content:
-                        logger.info(f"OpenRouter Gemini explanation generated successfully using {model}.")
+                    if content and content.strip():
+                        logger.info(f"Groq AI explanation generated successfully using {model}.")
                         return content.strip()
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
-            logger.warning(f"OpenRouter API ({model}) HTTP error {e.code}: {err_body}")
+            logger.warning(f"Groq API ({model}) HTTP error {e.code}: {err_body}")
             last_error = f"HTTP {e.code}: {err_body}"
             if e.code in (401, 403):
-                raise ValueError("Invalid OpenRouter API key. Please check your key at openrouter.ai.")
+                raise ValueError("Invalid Groq API key. Please check your key at console.groq.com.")
             continue
         except Exception as e:
-            logger.warning(f"OpenRouter API ({model}) error: {e}")
+            logger.warning(f"Groq API ({model}) error: {e}")
             last_error = str(e)
             continue
 
-    raise RuntimeError(f"Unable to generate explanation from OpenRouter Gemini ({last_error})")
-
-
-def call_google_gemini_direct(prompt: str, api_key: str) -> str:
-    """
-    Calls Google Generative Language endpoint directly with standard Gemini keys.
-    """
-    # Fast, high-availability models placed first to avoid timeouts and high-traffic 503 errors
-    models = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-    ]
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 300,
-        },
-    }
-    data = json.dumps(payload).encode("utf-8")
-
-    last_error = None
-    for model_name in models:
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        try:
-            req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=18) as resp:
-                resp_json = json.loads(resp.read().decode("utf-8"))
-                candidates = resp_json.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"].strip()
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="ignore")
-            logger.warning(f"Gemini API ({model_name}) HTTP error {e.code}: {err_body}")
-            last_error = f"HTTP {e.code}: {err_body}"
-            if e.code in (400, 403) and "API_KEY_INVALID" in err_body:
-                raise ValueError("Invalid Google Gemini API key.")
-            continue
-        except Exception as e:
-            logger.warning(f"Gemini API ({model_name}) error: {e}")
-            last_error = str(e)
-            continue
-
-    raise RuntimeError(f"Unable to generate explanation from Gemini API ({last_error})")
+    raise RuntimeError(f"Unable to generate explanation from Groq API ({last_error})")
 
 
 def generate_explanation(
@@ -284,32 +242,25 @@ def generate_explanation(
 ) -> dict:
     """
     Main entry point for generating explanations.
-    Uses Google Gemini API or OpenRouter Gemini Flash; falls back to rule-based XAI if unavailable.
+    Uses Groq AI API; falls back to rule-based XAI if unavailable.
     """
     indicators = extract_top_indicators(features_dict, is_phishing, risk_level)
     key = (
         api_key
-        or os.getenv("OPENROUTER_API_KEY")
-        or DEFAULT_OPENROUTER_KEY
-        or os.getenv("GEMINI_API_KEY")
-        or DEFAULT_GEMINI_KEY
+        or os.getenv("GROQ_API_KEY")
+        or DEFAULT_GROQ_KEY
     )
 
     if key and key.strip():
         clean_key = key.strip()
         try:
             prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators, is_phishing=is_phishing)
-            if clean_key.startswith("sk-or-"):
-                ai_text = call_openrouter_gemini(prompt, clean_key)
-                source_name = "openrouter_gemini"
-            else:
-                ai_text = call_google_gemini_direct(prompt, clean_key)
-                source_name = "gemini"
+            ai_text = call_groq_ai(prompt, clean_key)
 
             return {
                 "explanation": ai_text,
                 "top_indicators": indicators,
-                "source": source_name,
+                "source": "groq",
             }
         except Exception as e:
             logger.warning(f"Falling back to rule-based explanation due to API error: {e}")
@@ -319,7 +270,7 @@ def generate_explanation(
             elif "timed out" in err_str.lower():
                 service_note = "Cloud AI response timed out; displaying local XAI analysis."
             elif "Invalid" in err_str:
-                service_note = "Gemini API key is invalid or expired."
+                service_note = "Groq API key is invalid or expired."
             else:
                 service_note = "Cloud AI temporarily unavailable; displaying local XAI analysis."
 

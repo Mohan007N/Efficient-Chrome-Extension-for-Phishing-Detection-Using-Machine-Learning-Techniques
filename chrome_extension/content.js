@@ -548,10 +548,8 @@
             return;
           }
 
-          if (res.source === "openrouter_gemini" || res.source === "openrouter_direct") {
-            aiBadge.textContent = "✨ OpenRouter AI";
-          } else if (res.source === "gemini" || res.source === "gemini_direct") {
-            aiBadge.textContent = "✨ Gemini AI";
+          if (res.source === "groq" || res.source === "groq_direct") {
+            aiBadge.textContent = "⚡ Groq AI";
           } else {
             aiBadge.textContent = "Security Heuristics";
             aiBadge.style.background = "rgba(255, 255, 255, 0.08)";

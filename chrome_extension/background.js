@@ -114,8 +114,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Handle Explainable AI request
   if (message.type === "EXPLAIN_URL") {
-    chrome.storage.local.get("gemini_api_key", (stored) => {
-      const apiKey = message.gemini_api_key || stored.gemini_api_key || "";
+    chrome.storage.local.get("groq_api_key", (stored) => {
+      const apiKey = message.groq_api_key || stored.groq_api_key || "";
       const payload = {
         url: message.url || "",
         hostname: message.hostname || "",
@@ -123,7 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         risk_level: message.risk_level || "HIGH",
         phishing_probability: message.phishing_probability || 0.95,
         features: message.features || {},
-        gemini_api_key: apiKey,
+        groq_api_key: apiKey,
       };
 
       callExplainAPI(payload)
@@ -200,10 +200,10 @@ async function callExplainAPI(payload) {
     console.warn("[Background] Backend /explain request failed, attempting direct fallback:", err);
   }
 
-  // Direct client-side fallback if backend is unreachable and user has a key
-  const key = payload.gemini_api_key || "";
+  // Direct client-side fallback if backend is unreachable and user has a Groq key
+  const key = payload.groq_api_key || "";
   if (key && key.trim()) {
-    return await callGeminiDirectly({ ...payload, gemini_api_key: key });
+    return await callGroqDirectly({ ...payload, groq_api_key: key });
   }
 
   return {
@@ -213,10 +213,10 @@ async function callExplainAPI(payload) {
   };
 }
 
-async function callGeminiDirectly(payload) {
-  const key = (payload.gemini_api_key || "").trim();
+async function callGroqDirectly(payload) {
+  const key = (payload.groq_api_key || "").trim();
   if (!key) {
-    throw new Error("No API key configured. Add your key in the extension Settings.");
+    throw new Error("No Groq API key configured. Add your key in the extension Settings.");
   }
   const prompt = `You are a Cybersecurity Incident Responder. Explain why this website was flagged as phishing:
 Target URL: ${payload.url}
@@ -229,79 +229,48 @@ Provide a concise 3-point briefing:
 3. User Action: 1 direct safety advisory.
 Keep it under 130 words with clear bullet points.`;
 
-  // Check if OpenRouter key
-  if (key.startsWith("sk-or-")) {
-    const models = ["google/gemini-2.5-flash", "google/gemini-3.8-flash", "google/gemini-3.7-flash", "google/gemini-3.5-flash"];
-    for (const model of models) {
-      try {
-        const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${key}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://127.0.0.1:8000",
-            "X-Title": "AI Phishing Shield",
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              { role: "system", content: "You are an elite Cybersecurity Incident Responder providing concise Explainable AI briefings." },
-              { role: "user", content: prompt }
-            ],
-            temperature: 0.2,
-            max_tokens: 350,
-          }),
-        });
-
-        if (resp.ok) {
-          const json = await resp.json();
-          const text = json.choices?.[0]?.message?.content;
-          if (text) {
-            return {
-              explanation: text,
-              top_indicators: ["OpenRouter Gemini Flash threat analysis generated."],
-              source: "openrouter_direct",
-            };
-          }
-        }
-      } catch (e) {
-        console.warn(`[Background] OpenRouter ${model} error:`, e);
-      }
-    }
-  }
-
-  // Google Generative Language direct endpoint
-  const googleModels = ["gemini-2.0-flash", "gemini-1.5-flash"];
-  for (const model of googleModels) {
+  const models = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+  for (const model of models) {
     try {
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
-          }),
-        }
-      );
+      const reqBody = {
+        model: model,
+        messages: [
+          { role: "system", content: "You are an elite Cybersecurity Incident Responder providing concise Explainable AI briefings." },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 1024,
+      };
+      if (model.includes("gpt-oss")) {
+        reqBody.reasoning_effort = "low";
+      }
+
+      const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(reqBody),
+      });
+
       if (resp.ok) {
         const json = await resp.json();
-        const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) {
+        const text = json.choices?.[0]?.message?.content;
+        if (text && text.trim()) {
           return {
-            explanation: text,
-            top_indicators: ["Direct Google Gemini threat analysis generated."],
-            source: "gemini_direct",
+            explanation: text.trim(),
+            top_indicators: ["Groq AI threat analysis generated."],
+            source: "groq_direct",
           };
         }
       }
-    } catch (err) {
-      console.warn(`[Background] Direct Gemini ${model} failed:`, err);
+    } catch (e) {
+      console.warn(`[Background] Groq ${model} error:`, e);
     }
   }
 
-  throw new Error("AI explanation request failed. Please check your OpenRouter / Gemini key.");
+  throw new Error("AI explanation request failed. Please check your Groq API key.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

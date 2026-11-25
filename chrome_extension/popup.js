@@ -302,18 +302,18 @@ if (toggleKeyVisibilityBtn && settingsKeyInput) {
 }
 
 async function refreshSettingsUI() {
-  const stored = await store.get("gemini_api_key");
-  const hasKey = !!stored.gemini_api_key;
+  const stored = await store.get("groq_api_key");
+  const hasKey = !!stored.groq_api_key;
   if (hasKey) {
-    const key = stored.gemini_api_key;
+    const key = stored.groq_api_key;
     const masked = key.slice(0, 8) + "•".repeat(Math.max(6, key.length - 12)) + key.slice(-4);
     settingsKeyInput.placeholder = masked;
-    settingsKeyStatus.textContent = "● API key configured";
+    settingsKeyStatus.textContent = "● Groq API key configured";
     settingsKeyStatus.className = "key-status-text active";
     settingsClearBtn.style.display = "block";
   } else {
-    settingsKeyInput.placeholder = "sk-or-... or AIza...";
-    settingsKeyStatus.textContent = "● No API key configured";
+    settingsKeyInput.placeholder = "gsk_...";
+    settingsKeyStatus.textContent = "● No custom key configured";
     settingsKeyStatus.className = "key-status-text";
     settingsClearBtn.style.display = "none";
   }
@@ -335,7 +335,7 @@ if (settingsSaveBtn) {
     settingsSaveBtn.textContent = "Saving…";
     settingsSaveBtn.disabled = true;
 
-    await store.set({ gemini_api_key: val });
+    await store.set({ groq_api_key: val });
     settingsSaveBtn.textContent = "✓ Saved";
     settingsKeyInput.value = "";
     refreshSettingsUI();
@@ -351,6 +351,7 @@ if (settingsSaveBtn) {
 
 if (settingsClearBtn) {
   settingsClearBtn.addEventListener("click", async () => {
+    await store.remove("groq_api_key");
     await store.remove("gemini_api_key");
     refreshSettingsUI();
     if (currentTabData) loadXAIAnalysis();
@@ -633,8 +634,8 @@ async function loadXAIAnalysis(overrideKey = null) {
     xaiSourceBadge.className = "source-tag source-ai";
   }
 
-  const stored = await store.get("gemini_api_key");
-  const apiKey = overrideKey || stored.gemini_api_key || "";
+  const stored = await store.get("groq_api_key");
+  const apiKey = overrideKey || stored.groq_api_key || "";
 
   if (xaiKeyHint) {
     xaiKeyHint.style.display = "none";
@@ -654,7 +655,7 @@ async function loadXAIAnalysis(overrideKey = null) {
       risk_level: currentTabData.risk_level,
       phishing_probability: currentTabData.phishing_probability,
       features: currentTabData.features || {},
-      gemini_api_key: apiKey || null,
+      groq_api_key: apiKey || null,
     }, (res) => {
       if (!res || res.error) {
         if (xaiSourceBadge) {
@@ -673,11 +674,8 @@ async function loadXAIAnalysis(overrideKey = null) {
       }
 
       if (xaiSourceBadge) {
-        if (res.source === "openrouter_gemini" || res.source === "openrouter_direct") {
-          xaiSourceBadge.textContent = "✨ OpenRouter AI";
-          xaiSourceBadge.className = "xai-source-badge source-ai";
-        } else if (res.source === "gemini" || res.source === "gemini_direct") {
-          xaiSourceBadge.textContent = "✨ Gemini AI";
+        if (res.source === "groq" || res.source === "groq_direct") {
+          xaiSourceBadge.textContent = "⚡ Groq AI";
           xaiSourceBadge.className = "xai-source-badge source-ai";
         } else if (res.source === "rule_based_fallback") {
           xaiSourceBadge.textContent = "Security Heuristics";
@@ -696,7 +694,7 @@ async function loadXAIAnalysis(overrideKey = null) {
     // Standalone browser preview simulation
     setTimeout(() => {
       if (xaiSourceBadge) {
-        xaiSourceBadge.textContent = apiKey ? "Gemini AI" : "Rule Engine";
+        xaiSourceBadge.textContent = apiKey ? "⚡ Groq AI" : "Rule Engine";
         xaiSourceBadge.className = "xai-source-badge source-ai";
       }
       if (xaiText) {

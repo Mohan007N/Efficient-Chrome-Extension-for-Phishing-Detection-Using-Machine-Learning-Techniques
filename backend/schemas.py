@@ -128,12 +128,13 @@ class ExplainRequest(BaseModel):
     risk_level: Optional[str] = Field(default="HIGH", description="Risk level (HIGH, MEDIUM, LOW)")
     phishing_probability: Optional[float] = Field(default=0.95, description="Phishing confidence probability")
     features: Optional[dict] = Field(default_factory=dict, description="Extracted feature key-values")
-    gemini_api_key: Optional[str] = Field(default=None, description="Optional Google Gemini API key")
+    groq_api_key: Optional[str] = Field(default=None, description="Optional Groq API key")
+    gemini_api_key: Optional[str] = Field(default=None, description="Legacy optional API key field")
 
 
 class ExplainResponse(BaseModel):
     """Response returned by the /explain endpoint."""
-    explanation: str = Field(description="Human-readable explanation from Gemini AI or rule engine")
+    explanation: str = Field(description="Human-readable explanation from Groq AI or rule engine")
     top_indicators: list[str] = Field(default_factory=list, description="List of technical red flags")
-    source: str = Field(description="'gemini', 'rule_based', or 'rule_based_fallback'")
-    error: Optional[str] = Field(default=None, description="Optional error message if Gemini call failed")
+    source: str = Field(description="'groq', 'rule_based', or 'rule_based_fallback'")
+    error: Optional[str] = Field(default=None, description="Optional error message if Groq call failed")

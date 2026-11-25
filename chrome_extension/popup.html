@@ -59,11 +59,11 @@
           </button>
         </div>
         <p class="settings-desc">
-          Configure an optional <strong>Google Gemini</strong> or <strong>OpenRouter</strong> API key to enable extended security reasoning. PhishGuard operates fully offline with the built-in ML heuristic engine.
+          Configure an optional <strong>Groq</strong> API key to override the default reasoning engine. PhishGuard operates fully offline with the built-in ML heuristic engine.
         </p>
         <div class="key-field-wrap">
           <div class="key-input-box">
-            <input type="password" id="settingsKeyInput" class="key-input" placeholder="Enter API Key (sk-or-... or AIza...)" spellcheck="false" autocomplete="off" />
+            <input type="password" id="settingsKeyInput" class="key-input" placeholder="Enter Groq API Key (gsk_...)" spellcheck="false" autocomplete="off" />
             <button type="button" class="btn-toggle-eye" id="toggleKeyVisibilityBtn" title="Show/Hide Key" aria-label="Toggle password visibility">
               <svg id="eyeIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
@@ -71,11 +71,9 @@
           <button class="btn-save-key" id="settingsSaveBtn">Save</button>
         </div>
         <div class="settings-footer">
-          <span class="key-status-text" id="settingsKeyStatus">● No API key configured</span>
+          <span class="key-status-text" id="settingsKeyStatus">● No custom key configured</span>
           <div class="settings-links">
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" class="free-key-link">Gemini Studio ↗</a>
-            <span class="link-sep">·</span>
-            <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" class="free-key-link">OpenRouter ↗</a>
+            <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" class="free-key-link">Groq Console ↗</a>
           </div>
         </div>
         <button class="btn-clear-key" id="settingsClearBtn" style="display:none">Remove API key</button>

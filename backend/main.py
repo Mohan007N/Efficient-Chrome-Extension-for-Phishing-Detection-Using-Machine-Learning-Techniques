@@ -139,8 +139,7 @@ async def explain(request: ExplainRequest):
     """
     Explainable AI (XAI) Endpoint:
     Provides a detailed incident breakdown of why a website was flagged or deemed safe.
-    Utilizes Google Gemini API if an API key is provided, with intelligent
-    rule-based technical feature attribution as fallback.
+    Utilizes Groq AI API, with intelligent rule-based technical feature attribution as fallback.
     """
     try:
         explanation_data = generate_explanation(
@@ -150,7 +149,7 @@ async def explain(request: ExplainRequest):
             risk_level=request.risk_level,
             phishing_prob=request.phishing_probability,
             features_dict=request.features or {},
-            api_key=request.gemini_api_key,
+            api_key=request.groq_api_key or request.gemini_api_key,
         )
         return ExplainResponse(**explanation_data)
     except Exception as e:
