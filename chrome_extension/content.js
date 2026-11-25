@@ -146,14 +146,16 @@
 
     const titleEl      = document.querySelector("title");
     const HasTitle     = titleEl && titleEl.textContent.trim() !== "" ? 1 : 0;
-    const titleText    = titleEl ? titleEl.textContent.toLowerCase() : "";
+    const titleText    = titleEl ? titleEl.textContent.toLowerCase().replace(/[^a-z0-9 ]/g, " ") : "";
 
-    const domainWords  = currentDomain.replace(/\./g, " ").split(" ").filter(w => w.length > 2);
-    const titleWords   = titleText.split(/\s+/);
-    const DomainTitleMatchScore = domainWords.filter(w => titleWords.includes(w)).length * 10;
+    const domainWords  = currentDomain.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
+    const titleWords   = titleText.split(/\s+/).filter(w => w.length > 0);
+    const domainMatches = domainWords.filter(w => titleWords.includes(w) || titleText.includes(w)).length;
+    const DomainTitleMatchScore = domainWords.length > 0 ? Math.min(100, (domainMatches / domainWords.length) * 100) : 0;
 
-    const urlWords     = url.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(" ").filter(w => w.length > 2);
-    const URLTitleMatchScore = urlWords.filter(w => titleWords.includes(w)).length * 10;
+    const urlWords     = url.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
+    const urlMatches   = urlWords.filter(w => titleWords.includes(w) || titleText.includes(w)).length;
+    const URLTitleMatchScore = urlWords.length > 0 ? Math.min(100, (urlMatches / urlWords.length) * 100) : 0;
 
     const HasFavicon     = document.querySelector("link[rel*='icon']") ? 1 : 0;
     const Robots         = 0;
