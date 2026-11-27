@@ -43,13 +43,19 @@ TRUSTED_DOMAINS = {
     "barclays.co.uk", "hsbc.com", "standardchartered.com",
     # Tech / Cloud
     "github.com", "gitlab.com", "stackoverflow.com", "npmjs.com", "pypi.org",
-    "cloudflare.com", "aws.amazon.com", "cloud.google.com",
+    "cloudflare.com", "aws.amazon.com", "cloud.google.com", "python.org",
+    "mozilla.org", "w3schools.com", "readthedocs.io", "scikit-learn.org",
+    "pandas.pydata.org", "fastapi.tiangolo.com", "react.dev", "vitejs.dev",
+    "tailwindcss.com", "huggingface.co", "groq.com", "docker.com",
+    "kubernetes.io", "oracle.com", "ibm.com", "nvidia.com", "proton.me",
     "digitalocean.com", "heroku.com", "vercel.com", "netlify.com",
     "notion.so", "slack.com", "zoom.us", "dropbox.com", "box.com",
     "adobe.com", "salesforce.com", "atlassian.com", "jira.atlassian.com",
+    # Payments
+    "paypal.com", "stripe.com", "razorpay.com",
     # Education
     "wikipedia.org", "wikimedia.org", "khanacademy.org", "coursera.org",
-    "udemy.com", "edx.org", "medium.com",
+    "udemy.com", "edx.org", "medium.com", "arxiv.org",
     # India
     "irctc.co.in", "paytm.com", "phonepe.com", "gpay.app", "upi.com",
     "npci.org.in", "incometax.gov.in", "uidai.gov.in", "mygov.in",
@@ -69,6 +75,22 @@ TRUSTED_DOMAINS = {
 PHISHING_THRESHOLD = 0.70
 
 
+def _is_local_or_private_host(hostname: str) -> bool:
+    """Return True for localhost, loopback, or private LAN hosts."""
+    if not hostname:
+        return False
+    h = hostname.lower().strip().strip("[]")
+    if h in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or h.endswith(".local"):
+        return True
+    if h.startswith(("192.168.", "10.")):
+        return True
+    if h.startswith("172."):
+        parts = h.split(".")
+        if len(parts) >= 2 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return True
+    return False
+
+
 def _extract_root_domain(hostname: str) -> str:
     """
     Extract the root domain (e.g. 'www.instagram.com' → 'instagram.com').
@@ -76,12 +98,15 @@ def _extract_root_domain(hostname: str) -> str:
     """
     if not hostname:
         return ""
-    parts = hostname.lower().lstrip("www.").split(".")
+    host = hostname.lower().strip().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
     # Handle compound TLDs like co.uk, co.in
     compound_tld = {"co", "com", "net", "org", "gov", "edu"}
     if len(parts) >= 3 and parts[-2] in compound_tld:
         return ".".join(parts[-3:])
-    return ".".join(parts[-2:]) if len(parts) >= 2 else hostname
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 class PhishingPredictor:
@@ -163,8 +188,20 @@ class PhishingPredictor:
             except Exception:
                 hostname = ""
 
+        if _is_local_or_private_host(hostname):
+            logger.info(f"Local/private host '{hostname}' — returning LEGITIMATE without ML inference.")
+            return {
+                "is_phishing": False,
+                "phishing_probability": 0.01,
+                "legitimate_probability": 0.99,
+                "verdict": "✅ LOCAL HOST — Safe Development Environment",
+                "risk_level": "SAFE",
+                "whitelisted": True,
+                "top_indicators": ["Local loopback or private network address."],
+            }
+
         root = _extract_root_domain(hostname)
-        if root in TRUSTED_DOMAINS or hostname in TRUSTED_DOMAINS:
+        if root in TRUSTED_DOMAINS or hostname.lower() in TRUSTED_DOMAINS:
             logger.info(f"Whitelisted domain '{root}' — returning LEGITIMATE without ML inference.")
             return {
                 "is_phishing": False,
@@ -189,12 +226,13 @@ class PhishingPredictor:
         # ── 3. Encode categorical columns (TLD) ──────────────────────────────
         for col, le in self._encoders.items():
             if col in df_aligned.columns:
-                raw_val = str(df_aligned[col].iloc[0])
+                raw_val = str(df_aligned[col].iloc[0]).lower().strip().lstrip(".")
                 if raw_val in le.classes_:
                     df_aligned[col] = le.transform([raw_val])
                 else:
-                    logger.warning(f"Unseen TLD '{raw_val}' — fallback encoding 0")
-                    df_aligned[col] = 0
+                    fallback_val = int(le.transform(["com"])[0]) if "com" in le.classes_ else 0
+                    logger.warning(f"Unseen TLD '{raw_val}' — fallback encoding 'com' ({fallback_val})")
+                    df_aligned[col] = fallback_val
 
         # ── 4. Raw model prediction ──────────────────────────────────────────
         phishing_prob   = 0.5

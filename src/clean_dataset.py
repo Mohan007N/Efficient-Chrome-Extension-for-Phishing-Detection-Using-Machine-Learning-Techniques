@@ -278,12 +278,18 @@ def generate_modern_valid_samples(base_legit: pd.DataFrame, n_samples: int = 350
     sampled.loc[idx2, "NoOfSelfRef"] = rng.choice([0, 1, 2, 3, 5, 8, 12, 16], size=n2, p=[0.18, 0.17, 0.15, 0.15, 0.15, 0.10, 0.05, 0.05])
     sampled.loc[idx2, "NoOfEmptyRef"] = rng.choice([0, 1, 2], size=n2, p=[0.80, 0.15, 0.05])
     sampled.loc[idx2, "NoOfImage"] = rng.choice([0, 1, 2, 3, 5, 8], size=n2, p=[0.20, 0.25, 0.20, 0.15, 0.10, 0.10])
-    sampled.loc[idx2, "NoOfCSS"] = rng.integers(1, 6, size=n2)
-    sampled.loc[idx2, "NoOfJS"] = rng.integers(1, 10, size=n2)
+    sampled.loc[idx2, "NoOfCSS"] = rng.choice([0, 1, 2, 3, 4], size=n2, p=[0.15, 0.35, 0.25, 0.15, 0.10])
+    sampled.loc[idx2, "NoOfJS"] = rng.choice([0, 1, 2, 3, 5, 8], size=n2, p=[0.20, 0.25, 0.20, 0.15, 0.10, 0.10])
     sampled.loc[idx2, "HasSocialNet"] = rng.choice([0, 1], size=n2, p=[0.75, 0.25])
     sampled.loc[idx2, "HasCopyrightInfo"] = rng.choice([0, 1], size=n2, p=[0.45, 0.55])
     sampled.loc[idx2, "HasDescription"] = rng.choice([0, 1], size=n2, p=[0.45, 0.55])
     sampled.loc[idx2, "DomainTitleMatchScore"] = rng.choice([0.0, 25.0, 50.0, 100.0], size=n2, p=[0.25, 0.25, 0.25, 0.25])
+
+    # Allow ~25% of non-credential informational pages (Archetype 1 & 2) to be benign HTTP
+    # (including pure-HTML static pages with 0 JS / 0 CSS) so IsHTTPS=0 without login traps isn't flagged.
+    info_mask = (sampled.index < n1 + n2) & (sampled["HasPasswordField"] == 0) & (sampled["Bank"] == 0) & (sampled["Pay"] == 0) & (sampled["Crypto"] == 0)
+    http_mask = info_mask & (rng.random(size=n_samples) < 0.25)
+    sampled.loc[http_mask, "IsHTTPS"] = 0
 
     # Archetype 3: Valid HTTPS login / authentication portals
     idx3 = sampled.index[n1 + n2:]

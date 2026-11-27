@@ -3,7 +3,7 @@ import sys
 import time
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
 
 # Ensure the project root is in sys.path so src imports work
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -77,32 +77,44 @@ def main():
     models_dict = {
         "Decision Tree": DecisionTreeClassifier(
             random_state=42,
-            max_depth=20,         # Limit tree depth to prevent memorization
-            min_samples_leaf=5,   # Each leaf must cover at least 5 samples
-            min_samples_split=10  # A node must have 10 samples before splitting
+            max_depth=18,         # Limit tree depth to prevent memorization
+            min_samples_leaf=8,   # Each leaf must cover at least 8 samples
+            min_samples_split=16  # A node must have 16 samples before splitting
         ),
         "Random Forest": RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=120,
             random_state=42,
             n_jobs=-1,
-            max_depth=20,           # Same depth limit per tree
+            max_depth=20,
             min_samples_leaf=5,
-            max_features='sqrt'     # Each tree split sees sqrt(48) ≈ 7 features (boosts diversity)
-        )
+            max_features='sqrt'
+        ),
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            max_iter=250,
+            max_depth=8,
+            learning_rate=0.08,
+            min_samples_leaf=20,
+            l2_regularization=2.0,
+            random_state=42,
+        ),
     }
-    
+
     # If XGBoost is installed on the user's computer, we include it in the comparison
     if XGBOOST_AVAILABLE:
-        logger.info("XGBoost library detected. Adding XGBoost to training list.")
+        logger.info("XGBoost library detected. Adding regularized XGBoost to training list.")
         models_dict["XGBoost"] = XGBClassifier(
-            n_estimators=200,
+            n_estimators=280,
             random_state=42,
             n_jobs=-1,
             eval_metric="logloss",
-            max_depth=8,             # Shallower trees, forces generalization
-            learning_rate=0.1,
-            subsample=0.8,           # Use 80% of samples per tree (stochastic regularization)
-            colsample_bytree=0.8     # Use 80% of features per tree
+            max_depth=7,             # Balanced depth to prevent memorizing dataset quirks
+            learning_rate=0.08,
+            min_child_weight=5,      # Require stronger leaf support
+            subsample=0.8,
+            colsample_bytree=0.55,   # Spread tree splits across URL, security, and DOM features
+            colsample_bylevel=0.65,
+            reg_alpha=1.0,           # L1 regularization
+            reg_lambda=3.0,          # L2 regularization
         )
     else:
         logger.warning("XGBoost library not found. Skipping XGBoost model training. (You can install it using pip install xgboost)")
@@ -145,8 +157,8 @@ def main():
     comparison_df.to_csv(os.path.join("reports", "model_comparison_results.csv"), index=False)
     logger.info("Saved comparison results table to 'reports/model_comparison_results.csv'")
     
-    # 11. Select Best Model (based on F1 Score since class imbalance or false alarms matter in phishing)
-    best_model_row = comparison_df.loc[comparison_df["F1 Score"].idxmax()]
+    # 11. Select Best Model (prioritize F1 Score, breaking ties by highest Precision to minimize false alarms)
+    best_model_row = comparison_df.sort_values(by=["F1 Score", "Precision"], ascending=False).iloc[0]
     best_model_name = best_model_row["Model Name"]
     best_f1_score = best_model_row["F1 Score"]
     

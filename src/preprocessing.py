@@ -120,6 +120,8 @@ def preprocess_pipeline(df, logger, target_col='label', drop_cols=None):
             'URLSimilarityIndex',                # Always 100 for legitimate = label leakage
             'TLDLegitimateProb',                 # Pre-computed probability from labeled data
             'URLCharProb',                       # Pre-computed probability from labeled data
+            'Robots',                            # Hardcoded to 0 in browser extension -> train/inference skew
+            'NoOfSelfRedirect',                  # Not observable via DOM content script -> train/inference skew
         ]
         
     cols_to_drop_present = [col for col in drop_cols if col in df.columns and col != target_col]

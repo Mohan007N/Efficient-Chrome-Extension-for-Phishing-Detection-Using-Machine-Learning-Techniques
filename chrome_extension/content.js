@@ -168,15 +168,27 @@
     const NoOfSelfRedirect = 0;
     const NoOfiFrame      = document.querySelectorAll("iframe").length;
 
+    const currentParts  = currentDomain.split(".");
+    const rootDomain    = currentParts.length >= 2 ? currentParts.slice(-2).join(".") : currentDomain;
+
     const forms = document.querySelectorAll("form");
     let externalFormSubmit = 0;
     forms.forEach(form => {
-      const action = form.getAttribute("action") || "";
-      if (action.startsWith("http") && !action.includes(currentDomain)) externalFormSubmit = 1;
+      const action = (form.getAttribute("action") || "").trim();
+      if (action.startsWith("http")) {
+        try {
+          const actionHost = new URL(action).hostname.toLowerCase();
+          if (actionHost !== currentDomain && !actionHost.endsWith("." + rootDomain) && actionHost !== rootDomain) {
+            externalFormSubmit = 1;
+          }
+        } catch {
+          externalFormSubmit = 1;
+        }
+      }
     });
     const HasExternalFormSubmit = externalFormSubmit;
 
-    const socialNets   = ["facebook.com","twitter.com","instagram.com","linkedin.com","youtube.com","tiktok.com"];
+    const socialNets   = ["facebook.com","twitter.com","x.com","instagram.com","linkedin.com","youtube.com","tiktok.com","github.com"];
     const allLinks     = Array.from(document.querySelectorAll("a[href]")).map(a => a.href);
     const HasSocialNet = allLinks.some(href => socialNets.some(s => href.includes(s))) ? 1 : 0;
 
@@ -199,8 +211,8 @@
         emptyRef++;
       } else {
         try {
-          const lh = new URL(href).hostname;
-          if (lh === currentDomain || lh === "") selfRef++;
+          const lh = new URL(href).hostname.toLowerCase();
+          if (lh === currentDomain || lh === "" || lh === rootDomain || lh.endsWith("." + rootDomain)) selfRef++;
           else externalRef++;
         } catch { emptyRef++; }
       }
