@@ -24,9 +24,18 @@ from fastapi.responses import JSONResponse
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from backend.schemas import URLFeaturesRequest, PredictionResponse, HealthResponse, ExplainRequest, ExplainResponse
+from backend.schemas import (
+    AnalyzeURLRequest,
+    AnalyzeURLResponse,
+    ExplainRequest,
+    ExplainResponse,
+    HealthResponse,
+    PredictionResponse,
+    URLFeaturesRequest,
+)
 from backend.predictor import PhishingPredictor
 from backend.explainer import generate_explanation
+from src.web_forensics import extract_phiusiil_features_from_html, fetch_url_html
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -49,7 +58,8 @@ async def lifespan(app: FastAPI):
     global predictor
     logger.info("🚀 Starting PhishingDetection API — loading model artifacts...")
     models_dir = os.path.join(PROJECT_ROOT, "models")
-    predictor = PhishingPredictor(models_dir=models_dir)
+    dataset_dir = os.path.join(PROJECT_ROOT, "dataset")
+    predictor = PhishingPredictor(models_dir=models_dir, dataset_dir=dataset_dir)
     predictor.load()
     logger.info("✅ Model loaded successfully. API is ready.")
     yield
@@ -90,6 +100,10 @@ async def root():
         "docs": "/docs",
         "health": "/health",
         "predict": "POST /predict",
+        "analyze_url": "POST /analyze-url",
+        "scan": "GET /scan?url=...",
+        "unauthorized_sites": "GET /unauthorized-sites",
+        "discover": "POST /discover",
     }
 
 
@@ -142,19 +156,143 @@ async def explain(request: ExplainRequest):
     Utilizes Groq AI API, with intelligent rule-based technical feature attribution as fallback.
     """
     try:
+        merged_features = dict(request.features or {})
+        if predictor is not None and predictor.is_ready() and (request.url or request.hostname):
+            try:
+                fast_intel = predictor.intel.inspect_domain(
+                    request.url,
+                    request.hostname or "",
+                    merged_features,
+                    deep_scan=not predictor.intel.is_trusted(request.hostname or ""),
+                    use_ai_audit=False,
+                )
+                if fast_intel.get("indicators"):
+                    merged_features["_backend_indicators"] = fast_intel["indicators"]
+            except Exception:
+                pass
+
         explanation_data = generate_explanation(
             url=request.url,
             hostname=request.hostname,
             is_phishing=request.is_phishing,
             risk_level=request.risk_level,
             phishing_prob=request.phishing_probability,
-            features_dict=request.features or {},
+            features_dict=merged_features,
             api_key=request.groq_api_key or request.gemini_api_key,
         )
         return ExplainResponse(**explanation_data)
     except Exception as e:
         logger.error(f"Explanation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
+
+
+def _run_direct_url_scan(target_url: str, use_ai_audit: bool = True) -> AnalyzeURLResponse:
+    """Shared backend URL analyzer used by both POST /analyze-url and GET /scan."""
+    if predictor is None or not predictor.is_ready():
+        raise HTTPException(status_code=503, detail="Model is not loaded.")
+
+    clean_url = target_url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = f"https://{clean_url}"
+
+    from urllib.parse import urlparse
+    parsed = urlparse(clean_url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise HTTPException(status_code=400, detail="Invalid URL provided.")
+
+    features_dict: dict = {"url": clean_url, "URL": clean_url, "hostname": host, "Domain": host}
+    try:
+        final_url, status, html = fetch_url_html(clean_url, timeout=6.0, max_bytes=350_000)
+        if status < 400 and html and len(html) >= 200:
+            extracted = extract_phiusiil_features_from_html(final_url or clean_url, html, label=1)
+            if extracted:
+                features_dict.update(extracted)
+                features_dict["url"] = final_url or clean_url
+                features_dict["hostname"] = (urlparse(features_dict["url"]).hostname or host).lower()
+    except Exception as e:
+        logger.info(f"Live HTML fetch skipped for {clean_url}: {e}")
+
+    pred = predictor.predict(features_dict, deep_scan=True, use_ai_audit=use_ai_audit)
+    intel_info = (
+        {}
+        if pred["whitelisted"]
+        else predictor.intel.inspect_domain(
+            features_dict["url"],
+            features_dict["hostname"],
+            features_dict,
+            deep_scan=True,
+            use_ai_audit=use_ai_audit,
+        )
+    )
+
+    exp = generate_explanation(
+        url=features_dict["url"],
+        hostname=features_dict["hostname"],
+        is_phishing=pred["is_phishing"],
+        risk_level=pred["risk_level"],
+        phishing_prob=pred["phishing_probability"],
+        features_dict={**features_dict, "_backend_indicators": pred["top_indicators"]},
+    )
+
+    forensics = intel_info.get("forensics") or {}
+    return AnalyzeURLResponse(
+        url=features_dict["url"],
+        hostname=features_dict["hostname"],
+        is_unauthorized_or_phishing=pred["is_phishing"],
+        risk_probability=pred["phishing_probability"],
+        legitimate_probability=pred["legitimate_probability"],
+        verdict=pred["verdict"],
+        risk_level=pred["risk_level"],
+        whitelisted=pred["whitelisted"],
+        tranco_rank=intel_info.get("tranco_rank"),
+        domain_age_days=(intel_info.get("rdap") or {}).get("domain_age_days"),
+        registry_match=intel_info.get("registry_match") or {},
+        forensic_summary={
+            "is_commerce_or_portal": forensics.get("is_commerce_or_portal"),
+            "official_emails": forensics.get("official_emails"),
+            "free_emails": forensics.get("free_emails"),
+            "has_corp_id": forensics.get("has_corp_id"),
+            "has_prepaid": forensics.get("has_prepaid"),
+            "has_cod": forensics.get("has_cod"),
+            "restrictive_refund_clauses": forensics.get("restrictive_refund_clauses"),
+            "forensic_risk_score": forensics.get("forensic_risk_score"),
+        },
+        ai_audit=intel_info.get("ai_audit"),
+        top_indicators=pred["top_indicators"],
+        explanation=exp.get("explanation", ""),
+    )
+
+
+@app.post("/analyze-url", response_model=AnalyzeURLResponse, tags=["Unauthorized Website Scanner"])
+async def analyze_url(request: AnalyzeURLRequest):
+    """Fetch, inspect, and evaluate any URL directly on the backend (ML + RDAP + TLS + Forensics + AI)."""
+    return _run_direct_url_scan(request.url, use_ai_audit=request.use_ai_audit)
+
+
+@app.get("/scan", response_model=AnalyzeURLResponse, tags=["Unauthorized Website Scanner"])
+async def scan_url(url: str, use_ai_audit: bool = True):
+    """GET convenience endpoint to scan any target URL from browser/CLI/Swagger UI."""
+    return _run_direct_url_scan(url, use_ai_audit=use_ai_audit)
+
+
+@app.get("/unauthorized-sites", tags=["Unauthorized Website Discovery"])
+async def list_unauthorized_sites(q: str = "", category: str = "", limit: int = 50):
+    """Search and list real-world unauthorized, fake-shopping, and scam websites discovered by the backend."""
+    if predictor is None:
+        raise HTTPException(status_code=503, detail="Backend is initializing.")
+    sites = predictor.intel.search_catalog(query=q, category=category, limit=limit)
+    return {"count": len(sites), "sites": sites}
+
+
+@app.post("/discover", tags=["Unauthorized Website Discovery"])
+async def refresh_discovery(probe_live: bool = False):
+    """Refresh threat/fake-shop feeds and reload the backend's unauthorized website registry."""
+    from src.discover_unauthorized_sites import discover_and_build
+    summary = discover_and_build(probe_live=probe_live)
+    if predictor is not None:
+        predictor.intel.load()
+    return {"status": "refreshed", "summary": summary}
 
 
 # ---------------------------------------------------------------------------

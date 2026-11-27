@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import numpy as np
 import logging
+from src.features import engineer_features
 from src.utils import setup_logger, load_artifact
 
 # Initialize logger
@@ -54,8 +55,11 @@ def predict_single_url(features_dict, model, feature_columns, encoders):
     Returns:
         dict: Prediction results containing class and probability.
     """
-    # Create a DataFrame from the feature dict
+    # Create a DataFrame from the feature dict and attach engineered features
     df = pd.DataFrame([features_dict])
+    eng_df = engineer_features(df)
+    for col in eng_df.columns:
+        df[col] = eng_df[col].values
     
     # 1. Align features: Fill missing columns with default (0) and order them exactly as training
     for col in feature_columns:

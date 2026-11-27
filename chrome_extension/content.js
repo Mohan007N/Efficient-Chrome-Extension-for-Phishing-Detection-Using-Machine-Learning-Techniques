@@ -197,9 +197,9 @@
     const HasPasswordField = document.querySelector("input[type='password']") ? 1 : 0;
 
     const Bank             = containsKeywords(pageText, ["bank","banking","account","login","signin","verify","secure"]);
-    const Pay              = containsKeywords(pageText, ["payment","pay now","checkout","billing","invoice"]);
+    const Pay              = containsKeywords(pageText, ["payment","pay now","checkout","billing","invoice","add to cart","buy now","order now","shopping cart","credit card","debit card","cash on delivery"]);
     const Crypto           = containsKeywords(pageText, ["bitcoin","ethereum","crypto","wallet","blockchain","btc","eth"]);
-    const HasCopyrightInfo = containsKeywords(pageText, ["©","copyright","all rights reserved"]);
+    const HasCopyrightInfo = containsKeywords(pageText, ["©","copyright","all rights reserved"]) || (htmlSource.toLowerCase().includes("&copy;") ? 1 : 0);
 
     const NoOfImage = document.querySelectorAll("img").length;
     const NoOfCSS   = document.querySelectorAll("link[rel='stylesheet']").length;

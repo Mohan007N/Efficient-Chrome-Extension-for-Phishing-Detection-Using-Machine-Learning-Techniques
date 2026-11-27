@@ -7,6 +7,7 @@ from sklearn.preprocessing import LabelEncoder
 
 # Ensure project root is in path so src.utils can be found
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.features import engineer_features
 from src.utils import save_artifact
 
 def load_data(file_path, logger):
@@ -108,12 +109,14 @@ def preprocess_pipeline(df, logger, target_col='label', drop_cols=None):
     else:
         logger.info(f"Using configured target column: '{target_col}'")
         
-    # 3. Default columns to drop if not specified
+    # 3. Engineer shared lexical/brand/commerce risk features BEFORE dropping URL & Domain
+    eng_df = engineer_features(df)
+    logger.info(f"Engineered {eng_df.shape[1]} shared domain/commerce features: {list(eng_df.columns)}")
+
+    # 4. Default columns to drop if not specified
     # URL, Domain, and Title are unique/free-text metadata columns
     # URLSimilarityIndex, TLDLegitimateProb, URLCharProb are pre-computed similarity/probability
     # features that were derived using knowledge of the label (effectively encoding the answer).
-    # Including them causes artificially perfect accuracy on any model.
-    # Removing them gives a realistic and honest evaluation of ML feature power.
     if drop_cols is None:
         drop_cols = [
             'URL', 'Domain', 'Title',           # Metadata / free-text
@@ -129,8 +132,8 @@ def preprocess_pipeline(df, logger, target_col='label', drop_cols=None):
         df = df.drop(columns=cols_to_drop_present)
         logger.info(f"Dropped non-predictive/noisy columns: {cols_to_drop_present}")
         
-    # Separate features and target
-    X = df.drop(columns=[target_col])
+    # Separate features and target and attach engineered features
+    X = pd.concat([df.drop(columns=[target_col]), eng_df], axis=1)
     y = df[target_col]
     
     # 4. Handle categorical features

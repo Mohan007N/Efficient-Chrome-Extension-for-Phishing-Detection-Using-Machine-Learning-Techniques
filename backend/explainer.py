@@ -19,23 +19,38 @@ load_dotenv(override=True)
 
 logger = logging.getLogger("PhishingAPI.Explainer")
 
+from src.features import SUSPICIOUS_COMMERCE_TLDS, detect_brand_impersonation
+
 DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 
-SUSPICIOUS_TLDS = {
-    "xyz", "top", "work", "tk", "ml", "cf", "gq", "ga", "buzz", "cc",
-    "rest", "fit", "surf", "casa", "icu", "click", "link", "party",
-    "country", "stream", "gdn", "kim", "mom", "vip", "win"
-}
+SUSPICIOUS_TLDS = SUSPICIOUS_COMMERCE_TLDS
 
 
-def extract_top_indicators(features_dict: dict, is_phishing: bool, risk_level: str) -> list[str]:
+def extract_top_indicators(
+    features_dict: dict,
+    is_phishing: bool,
+    risk_level: str,
+    backend_indicators: list[str] | None = None,
+) -> list[str]:
     """
-    Examines page & URL features to identify primary technical red flags or verified safety factors.
-    Returns a human-readable list of bullet-point indicators.
+    Examines page, URL, and backend intelligence signals to identify primary red flags
+    (fake storefronts, upfront-payment traps, brand clones, credential harvesting)
+    or verified safety factors.
     """
-    indicators = []
+    indicators: list[str] = []
+    if backend_indicators:
+        for b_ind in backend_indicators:
+            if b_ind and b_ind not in indicators:
+                indicators.append(b_ind)
 
     if is_phishing:
+        hostname = str(features_dict.get("hostname", features_dict.get("Domain", "")))
+        imp_score, matched_brand = detect_brand_impersonation(hostname)
+        if imp_score >= 0.80 and matched_brand:
+            msg = f"Brand Impersonation: Unauthorized domain mimics '{matched_brand}'."
+            if not any("Brand Impersonation" in x for x in indicators):
+                indicators.append(msg)
+
         # 1. Password field checks
         has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
         if has_pwd:
@@ -88,34 +103,54 @@ def extract_top_indicators(features_dict: dict, is_phishing: bool, risk_level: s
         if iframes >= 2:
             indicators.append(f"Embedded Framing: {iframes} embedded iframes detected, which can conceal hidden credential collectors.")
 
-        # 10. Financial / Payment Keywords
+        # 10. Financial / Payment / Storefront Scam Patterns
         bank = int(features_dict.get("Bank", 0)) == 1
         pay = int(features_dict.get("Pay", 0)) == 1
         crypto = int(features_dict.get("Crypto", 0)) == 1
-        if bank or pay or crypto:
+        has_social = int(features_dict.get("HasSocialNet", 0)) == 1
+        has_copy = int(features_dict.get("HasCopyrightInfo", 0)) == 1
+
+        if pay and (empty_refs >= 4 or ext_submit or not has_social or (has_title and title_match < 20) or self_refs <= 8):
+            indicators.append(
+                "Fraudulent Storefront / Payment Scam Pattern: Checkout/payment prompts paired with broken navigation links, missing brand verification, or low internal catalog depth — high risk of non-delivery or payment theft."
+            )
+        elif bank or pay or crypto:
             target = "banking" if bank else ("payment" if pay else "crypto")
             indicators.append(f"High-Value Target Spoofing: Page contains keywords and layouts imitating {target} services.")
+
+        if pay and not has_social and not has_copy:
+            indicators.append("Unverified Merchant Metadata: Shopping/payment page lacks authentic social profiles and verified copyright metadata.")
 
         if not indicators:
             indicators.append(f"Anomalous URL Architecture: Model detected high-confidence phishing patterns ({risk_level} Risk).")
             indicators.append("Statistical feature distribution strongly matches verified fake login datasets.")
     else:
-        # Legitimate indicators
+        # Legitimate indicators — build user trust with clear, verifiable signals
         is_https = int(features_dict.get("IsHTTPS", 1)) == 1
         if is_https:
             indicators.append("Encrypted Protocol: Connection uses valid HTTPS transport encryption.")
 
         has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
         if not has_pwd:
-            indicators.append("No Deceptive Traps: Page does not harvest passwords or sensitive credentials.")
+            indicators.append("No Deceptive Credential Traps: Page does not request unexpected password harvesting.")
 
         ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
         if not ext_submit:
-            indicators.append("First-Party Actions: Forms submit directly to authorized domain endpoints.")
+            indicators.append("First-Party Actions: Checkout and form submissions stay on authorized domain endpoints.")
 
         title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
-        if title_match >= 0.5:
-            indicators.append("Domain Consistency: Hostname matches verified identity metadata.")
+        if title_match >= 20.0 or title_match == 1.0:
+            indicators.append("Domain-Brand Consistency: Hostname matches verified title identity metadata.")
+
+        self_refs = int(features_dict.get("NoOfSelfRef", 0))
+        empty_refs = int(features_dict.get("NoOfEmptyRef", 0))
+        if self_refs >= 10 and empty_refs <= 3:
+            indicators.append(f"Complete Site Navigation: Verified {self_refs} internal links with minimal broken '#' placeholders.")
+
+        has_social = int(features_dict.get("HasSocialNet", 0)) == 1
+        has_copy = int(features_dict.get("HasCopyrightInfo", 0)) == 1
+        if has_social or has_copy:
+            indicators.append("Authentic Publisher Metadata: Site includes verifiable copyright notices or official social links.")
 
         if not indicators:
             indicators.append("Clean Architecture: No anomalous redirects or obfuscations detected.")
@@ -139,9 +174,9 @@ Detected Technical Red Flags:
 {indicators_text}
 
 Provide an Explainable AI (XAI) security briefing for the user with the following sections:
-1. Threat Summary: In 2 sentences, explain what this site appears to be doing (e.g., impersonation, credential harvesting) and why our AI flagged it.
-2. Why It Is Dangerous: 3 concise bullet points explaining the exact risks if the user continues.
-3. Recommended Action: 1 direct, actionable sentence advising the user (e.g. close the tab, do not type credentials).
+1. Threat Summary: In 2 sentences, explain what this site appears to be doing (e.g., fake online shopping / non-delivery payment scam, brand impersonation, or credential harvesting) and why our AI flagged it beyond basic blocklists.
+2. Why It Is Dangerous: 3 concise bullet points explaining the exact risks if the user continues (such as lost money/non-delivered orders or stolen credentials).
+3. Recommended Action: 1 direct, actionable sentence advising the user (e.g. close the tab, do not enter payment details or credentials).
 
 Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 140 words."""
     else:
@@ -244,7 +279,8 @@ def generate_explanation(
     Main entry point for generating explanations.
     Uses Groq AI API; falls back to rule-based XAI if unavailable.
     """
-    indicators = extract_top_indicators(features_dict, is_phishing, risk_level)
+    backend_indicators = features_dict.get("_backend_indicators") if isinstance(features_dict, dict) else None
+    indicators = extract_top_indicators(features_dict, is_phishing, risk_level, backend_indicators=backend_indicators)
     key = (
         api_key
         or os.getenv("GROQ_API_KEY")

@@ -138,3 +138,29 @@ class ExplainResponse(BaseModel):
     top_indicators: list[str] = Field(default_factory=list, description="List of technical red flags")
     source: str = Field(description="'groq', 'rule_based', or 'rule_based_fallback'")
     error: Optional[str] = Field(default=None, description="Optional error message if Groq call failed")
+
+
+class AnalyzeURLRequest(BaseModel):
+    """Request for direct backend URL scanning (without requiring browser extension DOM input)."""
+    url: str = Field(description="Target HTTP/HTTPS URL to fetch, inspect, and score")
+    use_ai_audit: bool = Field(default=True, description="Whether to invoke Groq AI merchant audit when red flags trigger")
+
+
+class AnalyzeURLResponse(BaseModel):
+    """Comprehensive backend analysis result for a directly scanned URL."""
+    url: str
+    hostname: str
+    is_unauthorized_or_phishing: bool
+    risk_probability: float
+    legitimate_probability: float
+    verdict: str
+    risk_level: str
+    whitelisted: bool
+    tranco_rank: Optional[int] = None
+    domain_age_days: Optional[int] = None
+    registry_match: dict = Field(default_factory=dict)
+    forensic_summary: dict = Field(default_factory=dict)
+    ai_audit: Optional[dict] = None
+    top_indicators: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
