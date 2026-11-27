@@ -45,6 +45,104 @@ SOCIAL_DOMAINS = (
 )
 
 
+FIREWALL_BLOCK_PATTERNS = (
+    "access denied",
+    "website blocked",
+    "web page blocked",
+    "site is blocked",
+    "blocked by",
+    "fortiguard",
+    "cisco umbrella",
+    "sophos",
+    "threat prevention",
+    "url filtering",
+    "department of telecommunications",
+    "blocked as per",
+    "suspected phishing",
+    "deceptive site ahead",
+    "malicious website",
+    "this site has been blocked",
+    "security policy prohibits",
+)
+
+
+def inspect_dns_and_reachability(url: str, hostname: str, timeout: float = 3.5) -> dict:
+    """
+    Probe DNS resolution and live HTTP/TLS reachability to detect:
+    - DNS sinkholes / NXDOMAIN (firewall/ISP DNS blocking)
+    - Firewall / security block pages (HTTP 200/403/451 block notices)
+    - SSL/TLS verification errors or reset/refused connections
+    """
+    clean_host = (hostname or "").lower().strip().split(":", 1)[0]
+    res = {
+        "dns_resolved": False,
+        "dns_sinkholed": False,
+        "resolved_ips": [],
+        "http_status": None,
+        "final_url": url,
+        "html": "",
+        "firewall_block_page": False,
+        "ssl_error": False,
+        "connection_blocked": False,
+        "network_error": None,
+    }
+    if not clean_host:
+        return res
+
+    # 1. DNS check
+    try:
+        infos = socket.getaddrinfo(clean_host, None)
+        ips = sorted({item[4][0] for item in infos if item[4]})
+        res["resolved_ips"] = ips[:5]
+        res["dns_resolved"] = len(ips) > 0
+        if any(ip in ("0.0.0.0", "::", "::1") or ip.startswith("127.") for ip in ips):
+            res["dns_sinkholed"] = True
+    except Exception as e:
+        res["network_error"] = f"DNS failure: {e}"
+        return res
+
+    if res["dns_sinkholed"]:
+        return res
+
+    # 2. HTTP + TLS fetch (inspecting error bodies for firewall block pages too)
+    target = url if (url and url.startswith(("http://", "https://"))) else f"https://{clean_host}/"
+    try:
+        final_url, status, html = fetch_url_html(target, timeout=timeout, max_bytes=350_000)
+        res["final_url"] = final_url or target
+        res["http_status"] = status
+        res["html"] = html
+    except urllib.error.HTTPError as he:
+        res["http_status"] = int(getattr(he, "code", 403) or 403)
+        try:
+            raw = he.read(150_000)
+            enc = (he.headers.get("Content-Encoding") or "").lower()
+            if "gzip" in enc:
+                raw = gzip.decompress(raw)
+            res["html"] = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+    except ssl.SSLError as se:
+        res["ssl_error"] = True
+        res["network_error"] = f"TLS/SSL error: {se}"
+    except urllib.error.URLError as ue:
+        reason_str = str(getattr(ue, "reason", ue)).lower()
+        if isinstance(ue.reason, ssl.SSLError) or "ssl" in reason_str or "certificate" in reason_str:
+            res["ssl_error"] = True
+        else:
+            res["connection_blocked"] = True
+        res["network_error"] = f"Network/connection error: {ue.reason}"
+    except Exception as e:
+        res["connection_blocked"] = True
+        res["network_error"] = f"Connection blocked or timed out: {e}"
+
+    if res["html"]:
+        text_low = strip_html_text(res["html"]).lower()
+        if any(pat in text_low for pat in FIREWALL_BLOCK_PATTERNS):
+            res["firewall_block_page"] = True
+
+    return res
+
+
 def fetch_url_bytes(url: str, timeout: float = 8.0, max_bytes: int = 800_000) -> tuple[str, int, bytes]:
     """Fetch URL with gzip decompression and redirect tracking."""
     req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
@@ -414,21 +512,24 @@ def analyze_storefront_forensics(
     has_gstin = bool(re.search(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", full_text))
     has_corp_id = has_gstin or bool(re.search(r"\b(?:cin|llpin|gstin|vat\s*(?:no|number|id)|company\s*reg(?:istration)?)\b", full_text_low))
 
-    # Commerce / Upfront-payment / COD signals
+    # Commerce / Upfront-payment / Booking / Fee / Portal signals
     is_commerce_or_portal = bool(re.search(
-        r"add to cart|buy now|order now|shopping cart|checkout|book now|pay now|recharge now|upi|razorpay|paytm|cashfree",
+        r"add to cart|buy now|order now|shopping cart|checkout|book now|pay now|recharge now|"
+        r"registration fee|processing fee|invest now|deposit now|upi|razorpay|paytm|cashfree|payu|"
+        r"stripe|paypal|place order|proceed to pay",
         full_text_low + " " + full_html_low,
     ))
-    has_prepaid = bool(re.search(r"upi|razorpay|paytm|cashfree|payu|prepaid|credit card|debit card|net\s*banking|qr\s*code", full_text_low + " " + full_html_low))
+    has_prepaid = bool(re.search(r"upi|razorpay|paytm|cashfree|payu|prepaid|credit card|debit card|net\s*banking|qr\s*code|pay now", full_text_low + " " + full_html_low))
     has_cod = bool(re.search(r"cash on delivery|pay on delivery|\bcod\s+available|\bcod\b", full_text_low))
 
-    # Predatory / trapped-refund clauses
+    # Predatory / trapped-refund clauses & placeholder templates
     restrictive_refund_clauses = re.findall(
         r"store credit|wallet credit|credit note only|no refund|non[- ]refundable|no return|no cancellation|exchange only|final sale",
         full_text_low,
     )
     has_wallet_refund_trap = bool(re.search(r"store credit|wallet credit|credit note only", full_text_low))
     has_no_refund_trap = bool(re.search(r"no refund|non[- ]refundable|no return|final sale", full_text_low))
+    has_placeholder_template = bool(re.search(r"lorem ipsum|\[company name\]|your store name|insert company address", full_text_low))
 
     # Unrealistic discounts & countdown urgency dark patterns
     extreme_discounts = re.findall(r"\b(?:7[5-9]|8\d|9[0-5])\s*%\s*off\b", full_text_low)
@@ -481,6 +582,10 @@ def analyze_storefront_forensics(
         if has_urgency_timer and not has_corp_id:
             risk_score += 0.10
             flags.append("Urgency Pressure Dark Pattern: Uses countdown/scarcity pressure alongside unverified merchant identity.")
+
+        if has_placeholder_template:
+            risk_score += 0.20
+            flags.append("Unfinished / Cloned Storefront Template: Detected placeholder text ('lorem ipsum' or generic template tags).")
 
     return {
         "is_commerce_or_portal": is_commerce_or_portal,

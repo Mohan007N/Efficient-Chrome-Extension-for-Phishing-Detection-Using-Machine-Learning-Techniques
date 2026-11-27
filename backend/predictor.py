@@ -1,30 +1,33 @@
 """
-backend/predictor.py — Production ML + Multi-Layer Unauthorized Website Detection Engine
+backend/predictor.py — Multi-Model Predictor & Hybrid Website Safety Orchestrator
 
-Combines:
-1. Trusted domain & local/private host verification
-2. Upgraded ML classifier (56 features: 46 base DOM/URL + 10 shared lexical/commerce features)
-3. Server-side Unauthorized Website Intelligence Engine (backend/intel.py):
-   - Discovered fake-shop, scam & phishing domain index (470k+ domains + verified scam stores)
-   - Brand impersonation & typosquatting detection
-   - Tranco Top-1M authority check
-   - Live RDAP domain age, TLS cert, storefront/payment/refund forensics & Groq AI audit
+Loads:
+- Model 1: Separated URL Risk Classifier (`models/url_model.pkl`)
+- Model 2: Separated DOM Behaviour Classifier (`models/dom_model.pkl`)
+- Model 3: Brand Impersonation Detector (`src/features.py`)
+- Model 4: Credential & Payment Risk Detector (`src/dom_features.py`)
+- Model 5: Threat Intelligence Engine (`backend/intel.py`)
+- Risk Fusion: HybridRiskEngine (`backend/risk_engine.py`)
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from typing import Any
+from urllib.parse import urlparse
+
 import joblib
 import pandas as pd
 
 from backend.intel import UnauthorizedIntelEngine
-from src.features import TRUSTED_DOMAINS, engineer_features, extract_root_domain
+from backend.risk_engine import HybridRiskEngine
+from backend.security import sanitize_telemetry_dict
+from src.dom_features import DOM_FEATURE_COLUMNS, extract_dom_features_from_html, normalize_dom_feature_dict
+from src.features import URL_FEATURE_COLUMNS, extract_root_domain, extract_url_features
+from src.model_registry import get_active_registry_manifest
 
 logger = logging.getLogger("PhishingAPI.Predictor")
-
-# Calibrated probability threshold required to flag a page as unauthorized/phishing.
-PHISHING_THRESHOLD = 0.70
 
 
 def _is_local_or_private_host(hostname: str) -> bool:
@@ -44,212 +47,248 @@ def _is_local_or_private_host(hostname: str) -> bool:
 
 
 class PhishingPredictor:
-    """Wraps trained ML artifacts + UnauthorizedIntelEngine with a unified predict() interface."""
+    """Orchestrates URL ML, DOM ML, Brand/Credential/Payment rules, Threat Intel, and Risk Fusion."""
 
     def __init__(self, models_dir: str = "models", dataset_dir: str = "dataset"):
         self.models_dir = models_dir
         self.dataset_dir = dataset_dir
-        self._model = None
-        self._encoders: dict = {}
-        self._feature_columns: list = []
+
+        self._url_model = None
+        self._url_encoders: dict = {}
+        self._url_features: list[str] = list(URL_FEATURE_COLUMNS)
+
+        self._dom_model = None
+        self._dom_features: list[str] = list(DOM_FEATURE_COLUMNS)
+
         self.intel = UnauthorizedIntelEngine(dataset_dir=dataset_dir)
+        self.risk_engine = HybridRiskEngine()
+        self.manifest: dict = {}
 
     def load(self):
-        """Load ML artifacts and threat/authority intelligence indexes from disk."""
-        model_path = os.path.join(self.models_dir, "best_phishing_model.pkl")
-        encoder_path = os.path.join(self.models_dir, "label_encoder.pkl")
-        features_path = os.path.join(self.models_dir, "feature_columns.pkl")
+        """Load versioned URL & DOM models, encoders, and threat intelligence indexes."""
+        url_model_path = os.path.join(self.models_dir, "url_model.pkl")
+        if not os.path.exists(url_model_path):
+            url_model_path = os.path.join(self.models_dir, "best_phishing_model.pkl")
+        url_enc_path = os.path.join(self.models_dir, "url_encoders.pkl")
+        url_feat_path = os.path.join(self.models_dir, "url_feature_columns.pkl")
 
-        for path in [model_path, encoder_path, features_path]:
-            if not os.path.exists(path):
-                raise FileNotFoundError(
-                    f"Required model artifact not found: {path}\n"
-                    "Please run 'python src/train.py' first."
-                )
+        if os.path.exists(url_model_path):
+            self._url_model = joblib.load(url_model_path)
+        if os.path.exists(url_enc_path):
+            self._url_encoders = joblib.load(url_enc_path)
+        if os.path.exists(url_feat_path):
+            self._url_features = joblib.load(url_feat_path)
 
-        logger.info(f"Loading model from: {model_path}")
-        self._model = joblib.load(model_path)
-        self._encoders = joblib.load(encoder_path)
-        self._feature_columns = joblib.load(features_path)
+        dom_model_path = os.path.join(self.models_dir, "dom_model.pkl")
+        dom_feat_path = os.path.join(self.models_dir, "dom_feature_columns.pkl")
+        if os.path.exists(dom_model_path):
+            self._dom_model = joblib.load(dom_model_path)
+        if os.path.exists(dom_feat_path):
+            self._dom_features = joblib.load(dom_feat_path)
+
         self.intel.load()
+        self.manifest = get_active_registry_manifest()
 
         logger.info(
-            f"Artifacts loaded — model: {type(self._model).__name__}, "
-            f"features: {len(self._feature_columns)}, "
-            f"phishing_threshold: {PHISHING_THRESHOLD}, "
-            f"whitelist_size: {len(TRUSTED_DOMAINS)}"
+            f"Models loaded — url_model={self.url_model_type()} ({len(self._url_features)} cols), "
+            f"dom_model={self.dom_model_type()} ({len(self._dom_features)} cols)"
         )
 
     def is_ready(self) -> bool:
-        return self._model is not None and len(self._feature_columns) > 0
+        return self._url_model is not None or self._dom_model is not None
+
+    def url_model_ready(self) -> bool:
+        return self._url_model is not None
+
+    def dom_model_ready(self) -> bool:
+        return self._dom_model is not None
+
+    def url_model_type(self) -> str:
+        return type(self._url_model).__name__ if self._url_model else "N/A"
+
+    def dom_model_type(self) -> str:
+        return type(self._dom_model).__name__ if self._dom_model else "N/A"
 
     def model_type(self) -> str:
-        return type(self._model).__name__ if self._model else "N/A"
+        return f"URL:{self.url_model_type()} + DOM:{self.dom_model_type()}"
 
     def feature_count(self) -> int:
-        return len(self._feature_columns)
+        return len(self._url_features) + len(self._dom_features)
 
-    def _ml_predict_proba(self, features_dict: dict) -> tuple[float, float]:
-        """Run the serialized ML model on 56 engineered + base features."""
-        df = pd.DataFrame([features_dict])
-        eng_df = engineer_features(df)
-        for col in eng_df.columns:
-            df[col] = eng_df[col].values
+    def prepare_url_dataframe(self, url: str) -> pd.DataFrame:
+        """Build aligned single-row DataFrame for Model 1 (URL Risk Classifier)."""
+        feats = extract_url_features(url)
+        df = pd.DataFrame([feats])
+        for c in self._url_features:
+            if c not in df.columns:
+                df[c] = 0
+        df = df[self._url_features].copy()
+        if "tld" in df.columns and "tld" in self._url_encoders:
+            df["tld"] = df["tld"].fillna("com").astype(str).str.lower().str.strip()
+            df[["tld"]] = self._url_encoders["tld"].transform(df[["tld"]])
+        for c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        return df
 
-        for col in self._feature_columns:
-            if col not in df.columns:
-                df[col] = 0
+    def prepare_dom_dataframe(self, dom_dict: dict, url: str = "") -> pd.DataFrame:
+        """Build aligned single-row DataFrame for Model 2 (DOM Behaviour Classifier)."""
+        norm = normalize_dom_feature_dict(dom_dict, url=url)
+        df = pd.DataFrame([norm])
+        for c in self._dom_features:
+            if c not in df.columns:
+                df[c] = 0.0
+        df = df[self._dom_features].copy()
+        for c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        return df
 
-        df_aligned = df[self._feature_columns].copy()
+    def _predict_url_threat_prob(self, url: str) -> tuple[float | None, pd.DataFrame | None]:
+        if self._url_model is None or not url:
+            return None, None
+        # Ensure we only run URL model when schema matches URL_FEATURE_COLUMNS
+        if "url_length" not in self._url_features:
+            return None, None
+        df_u = self.prepare_url_dataframe(url)
+        if hasattr(self._url_model, "predict_proba"):
+            proba = self._url_model.predict_proba(df_u)[0]
+            # class 0 = risky/phishing, class 1 = benign
+            return float(proba[0]), df_u
+        pred = int(self._url_model.predict(df_u)[0])
+        return (0.85 if pred == 0 else 0.15), df_u
 
-        for col, le in self._encoders.items():
-            if col in df_aligned.columns:
-                raw_val = str(df_aligned[col].iloc[0]).lower().strip().lstrip(".")
-                if raw_val in le.classes_:
-                    df_aligned[col] = le.transform([raw_val])
-                else:
-                    fallback_val = int(le.transform(["com"])[0]) if "com" in le.classes_ else 0
-                    df_aligned[col] = fallback_val
+    def _predict_dom_threat_prob(self, dom_dict: dict, url: str = "") -> tuple[float | None, pd.DataFrame | None]:
+        if self._dom_model is None:
+            return None, None
+        df_d = self.prepare_dom_dataframe(dom_dict, url=url)
+        if hasattr(self._dom_model, "predict_proba"):
+            proba = self._dom_model.predict_proba(df_d)[0]
+            return float(proba[0]), df_d
+        pred = int(self._dom_model.predict(df_d)[0])
+        return (0.85 if pred == 0 else 0.15), df_d
 
-        if hasattr(self._model, "predict_proba"):
-            proba = self._model.predict_proba(df_aligned)[0]
-            return float(proba[0]), float(proba[1])
-        return 0.5, 0.5
+    def assess_website(
+        self,
+        url: str = "",
+        hostname: str = "",
+        dom_features: dict | None = None,
+        html: str | None = None,
+        redirect_chain: list[str] | None = None,
+        legacy_payload: dict | None = None,
+        deep_scan: bool = True,
+    ) -> dict[str, Any]:
+        """Full multi-layer website safety and trust assessment."""
+        clean_legacy = sanitize_telemetry_dict(legacy_payload or {})
+        clean_dom_input = sanitize_telemetry_dict(dom_features or {})
 
-    def predict(self, features_dict: dict, deep_scan: bool = True, use_ai_audit: bool = True) -> dict:
-        """
-        Run hybrid ML + server-side unauthorized website intelligence prediction.
-        Keeps exact PredictionResponse output structure for full Chrome Extension compatibility.
-        """
-        if not self.is_ready():
-            raise RuntimeError("Model is not loaded. Call load() first.")
+        parsed = urlparse(url or "")
+        host = (hostname or parsed.hostname or "").lower().strip()
+        root = extract_root_domain(host)
+        is_local = _is_local_or_private_host(host)
+        is_whitelisted = (not is_local) and self.intel.is_trusted(host)
 
-        url = str(features_dict.get("url", features_dict.get("URL", "")))
-        hostname = str(features_dict.get("hostname", features_dict.get("Domain", "")))
+        # Resolve DOM features cleanly
+        has_dom_observation = False
+        resolved_dom: dict = {}
+        if html and html.strip():
+            resolved_dom = extract_dom_features_from_html(url, html)
+            has_dom_observation = True
+        elif clean_dom_input:
+            resolved_dom = normalize_dom_feature_dict(clean_dom_input, url=url)
+            has_dom_observation = True
+        elif any(k in clean_legacy for k in ("LineOfCode", "HasPasswordField", "NoOfiFrame", "HasExternalFormSubmit")):
+            if int(clean_legacy.get("LineOfCode", 0) or 0) > 0 or int(clean_legacy.get("HasTitle", 0) or 0) > 0:
+                resolved_dom = normalize_dom_feature_dict(clean_legacy, url=url)
+                has_dom_observation = True
 
-        if not hostname and url.startswith("http"):
-            try:
-                from urllib.parse import urlparse
-                hostname = urlparse(url).hostname or ""
-            except Exception:
-                hostname = ""
+        url_threat_prob, url_df = self._predict_url_threat_prob(url) if (url and not is_local) else (None, None)
+        dom_threat_prob, dom_df = self._predict_dom_threat_prob(resolved_dom, url=url) if (has_dom_observation and not is_local) else (None, None)
 
-        if _is_local_or_private_host(hostname):
-            return {
-                "is_phishing": False,
-                "phishing_probability": 0.01,
-                "legitimate_probability": 0.99,
-                "verdict": "✅ LOCAL HOST — Safe Development Environment",
-                "risk_level": "SAFE",
-                "whitelisted": True,
-                "top_indicators": ["Local loopback or private network address."],
-            }
-
-        root = extract_root_domain(hostname)
-        if self.intel.is_trusted(hostname):
-            logger.info(f"Whitelisted domain '{root}' — returning LEGITIMATE.")
-            return {
-                "is_phishing": False,
-                "phishing_probability": 0.02,
-                "legitimate_probability": 0.98,
-                "verdict": "✅ TRUSTED DOMAIN — Whitelisted",
-                "risk_level": "LOW",
-                "whitelisted": True,
-                "top_indicators": ["Verified global/authorized domain in trusted security registry."],
-            }
-
-        # ── 1. ML Classifier Score ───────────────────────────────────────────
-        ml_phish_prob, _ = self._ml_predict_proba(features_dict)
-
-        # ── 2. Server-Side Intelligence & Forensics ──────────────────────────
-        # Always run fast O(1) registry + brand impersonation first; run live RDAP/TLS/HTML
-        # forensics when deep_scan is enabled and domain isn't already a confirmed threat feed match.
-        fast_intel = self.intel.inspect_domain(url, hostname, features_dict, deep_scan=False, use_ai_audit=False)
-        tranco_rank = fast_intel.get("tranco_rank")
-        is_established_top_brand = tranco_rank is not None and tranco_rank <= 15_000
-
-        should_deep_probe = (
-            deep_scan
-            and not fast_intel["registry_match"]["matched"]
-            and not is_established_top_brand
-            and (
-                int(features_dict.get("Pay", 0)) == 1
-                or int(features_dict.get("Bank", 0)) == 1
-                or int(features_dict.get("Crypto", 0)) == 1
-                or int(features_dict.get("HasPasswordField", 0)) == 1
-                or ml_phish_prob >= 0.25
-                or (url.startswith("http") and (tranco_rank is None or tranco_rank > 25_000))
+        intel_res = (
+            {}
+            if is_local
+            else self.intel.inspect_domain(
+                url,
+                host,
+                clean_legacy,
+                deep_scan=(deep_scan and not is_whitelisted),
+                use_ai_audit=False,
             )
         )
 
-        intel_res = (
-            self.intel.inspect_domain(url, hostname, features_dict, deep_scan=True, use_ai_audit=use_ai_audit)
-            if should_deep_probe
-            else fast_intel
+        assessment = self.risk_engine.assess(
+            url=url,
+            hostname=host,
+            url_threat_prob=url_threat_prob,
+            dom_threat_prob=dom_threat_prob,
+            dom_features=resolved_dom,
+            intel_result=intel_res,
+            redirect_chain=redirect_chain or (intel_res.get("forensics") or {}).get("redirect_chain"),
+            is_whitelisted=is_whitelisted,
+            is_local=is_local,
+            has_dom_observation=has_dom_observation,
         )
 
-        backend_risk = float(intel_res.get("backend_risk_score", 0.0))
-        backend_indicators = list(intel_res.get("indicators", []))
-
-        # ── 3. Calibrated Probability Fusion ─────────────────────────────────
-        if intel_res["registry_match"]["matched"] or intel_res["brand_impersonation_score"] >= 0.80:
-            phishing_prob = max(ml_phish_prob, backend_risk)
-        elif is_established_top_brand and int(features_dict.get("HasExternalFormSubmit", 0)) == 0:
-            # Established Top-15k Tranco sites shouldn't be false-flagged on noisy DOM counts alone
-            phishing_prob = min(ml_phish_prob, 0.45)
-        elif backend_risk >= 0.55:
-            # High forensic/AI/RDAP scam evidence elevates stealthy HTTPS pages that evade DOM counts
-            phishing_prob = max(backend_risk, 0.45 * ml_phish_prob + 0.55 * backend_risk)
-        elif should_deep_probe and backend_risk <= 0.15 and int(features_dict.get("HasExternalFormSubmit", 0)) == 0:
-            # Deep scan verified clean domain age/email/policies -> dampen borderline ML false positives
-            forensics = intel_res.get("forensics") or {}
-            age_days = (intel_res.get("rdap") or {}).get("domain_age_days")
-            has_strong_legit = bool(forensics.get("official_emails")) and (age_days is None or age_days >= 365)
-            phishing_prob = min(ml_phish_prob, 0.55) if has_strong_legit else ml_phish_prob
+        overall = assessment["overall_risk_level"]
+        if overall == "CRITICAL":
+            verdict = f"🚨 CRITICAL RISK — Threat or strong malicious indicators detected ({root or host})"
+        elif overall == "HIGH":
+            verdict = f"⚠️ HIGH RISK — Multiple suspicious safety indicators ({root or host})"
+        elif overall == "MEDIUM":
+            verdict = f"⚡ CAUTION (MEDIUM RISK) — Verify transport/authenticity ({root or host})"
+        elif overall == "UNKNOWN":
+            verdict = f"❓ UNKNOWN — Insufficient information to assess ({root or host})"
         else:
-            phishing_prob = max(ml_phish_prob, 0.35 * ml_phish_prob + 0.65 * backend_risk)
+            verdict = f"✅ LOW RISK — No significant safety indicators detected ({root or host})"
 
-        phishing_prob = round(max(0.0, min(1.0, phishing_prob)), 4)
-        legitimate_prob = round(1.0 - phishing_prob, 4)
-        is_phishing = phishing_prob >= PHISHING_THRESHOLD
+        assessment.update({
+            "url": url,
+            "hostname": host,
+            "verdict": verdict,
+            "whitelisted": is_whitelisted,
+            "tranco_rank": intel_res.get("tranco_rank"),
+            "domain_age_days": (intel_res.get("rdap") or {}).get("domain_age_days"),
+            "registry_match": intel_res.get("registry_match") or {},
+            "_url_df": url_df,
+            "_dom_df": dom_df,
+        })
+        return assessment
 
-        if phishing_prob >= 0.85:
-            risk_level = "HIGH"
-        elif phishing_prob >= 0.70:
-            risk_level = "MEDIUM"
-        elif phishing_prob >= 0.50:
-            risk_level = "LOW"
-        else:
-            risk_level = "SAFE"
+    def predict(self, features_dict: dict, deep_scan: bool = True, use_ai_audit: bool = False) -> dict:
+        """
+        Backward-compatible prediction interface for Chrome Extension /predict endpoint.
+        Includes full multi-dimension `assessment` alongside legacy fields.
+        """
+        if not self.is_ready():
+            raise RuntimeError("No ML models loaded. Run training pipeline first.")
 
-        if is_phishing:
-            if intel_res["registry_match"]["category"] in ("upfront_payment_scam_store", "fake_shop_or_scam", "scam_commerce_or_clone"):
-                verdict = f"⚠️ UNAUTHORIZED / SCAM SITE DETECTED — {risk_level} RISK ({phishing_prob:.1%} confidence)"
-            else:
-                verdict = f"⚠️ PHISHING / UNAUTHORIZED SITE DETECTED — {risk_level} RISK ({phishing_prob:.1%} confidence)"
-        else:
-            verdict = f"✅ LEGITIMATE ({legitimate_prob:.1%} confidence)"
+        clean_payload = sanitize_telemetry_dict(features_dict)
+        url = str(clean_payload.get("url", clean_payload.get("URL", "")))
+        hostname = str(clean_payload.get("hostname", clean_payload.get("Domain", "")))
+        if not hostname and url.startswith(("http://", "https://")):
+            hostname = urlparse(url).hostname or ""
 
-        logger.info(
-            f"Prediction: {'FLAGGED' if is_phishing else 'LEGIT'} | "
-            f"p_final={phishing_prob:.3f} (ml={ml_phish_prob:.3f}, intel={backend_risk:.3f}) | "
-            f"risk={risk_level} | domain={root or hostname}"
+        assessment = self.assess_website(
+            url=url,
+            hostname=hostname,
+            dom_features=clean_payload.get("dom_features"),
+            redirect_chain=clean_payload.get("redirect_chain"),
+            legacy_payload=clean_payload,
+            deep_scan=deep_scan,
         )
 
-        from backend.explainer import extract_top_indicators
-        top_indicators = extract_top_indicators(
-            features_dict,
-            is_phishing,
-            risk_level,
-            backend_indicators=backend_indicators if is_phishing else None,
-        )
+        # Strip internal DataFrames before JSON serialization
+        assessment_public = {k: v for k, v in assessment.items() if not k.startswith("_")}
+        overall = assessment_public["overall_risk_level"]
+        is_risky = overall in ("HIGH", "CRITICAL")
+        risk_ratio = round(float(assessment_public["heuristic_risk_index"]) / 100.0, 4)
 
         return {
-            "is_phishing": is_phishing,
-            "phishing_probability": phishing_prob,
-            "legitimate_probability": legitimate_prob,
-            "verdict": verdict,
-            "risk_level": risk_level,
-            "whitelisted": False,
-            "top_indicators": top_indicators,
+            "is_phishing": is_risky,
+            "phishing_probability": risk_ratio,
+            "legitimate_probability": round(1.0 - risk_ratio, 4),
+            "verdict": assessment_public["verdict"],
+            "risk_level": overall,
+            "whitelisted": assessment_public["whitelisted"],
+            "top_indicators": assessment_public["evidence"][:8],
+            "assessment": assessment_public,
         }

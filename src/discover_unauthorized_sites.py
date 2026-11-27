@@ -44,6 +44,9 @@ LIVE_FEATURES_PATH = os.path.join(DATASET_DIR, "live_discovered_features.csv")
 
 THREAT_FEEDS = {
     "hagezi_fake": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt",
+    "hagezi_tif": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt",
+    "phishing_database": "https://raw.githubusercontent.com/Phishing-Database/Phishing.Database/master/phishing-domains-ACTIVE.txt",
+    "cert_pl": "https://hole.cert.pl/domains/v2/domains.txt",
     "jarelllama_scams": "https://raw.githubusercontent.com/jarelllama/Scam-Blocklist/main/lists/wildcard_domains/scams.txt",
     "openphish": "https://openphish.com/feed.txt",
 }
@@ -150,10 +153,13 @@ def fetch_tranco_ranks(timeout: float = 20.0) -> dict[str, int]:
     return ranks
 
 
-def fetch_threat_feeds(timeout: float = 20.0) -> dict[str, object]:
-    """Fetch HaGeZi Fake, jarelllama Scam-Blocklist, and OpenPhish feeds."""
+def fetch_threat_feeds(timeout: float = 25.0) -> dict[str, object]:
+    """Fetch HaGeZi Fake, HaGeZi TIF, Phishing.Database, CERT.pl, Scam-Blocklist, and OpenPhish feeds."""
     results: dict[str, object] = {
         "hagezi_fake": [],
+        "hagezi_tif": [],
+        "phishing_database": [],
+        "cert_pl": [],
         "jarelllama_scams": [],
         "openphish_urls": [],
         "openphish_domains": [],
@@ -162,7 +168,7 @@ def fetch_threat_feeds(timeout: float = 20.0) -> dict[str, object]:
     for key, feed_url in THREAT_FEEDS.items():
         try:
             print(f"Fetching feed '{key}' from {feed_url}...")
-            _, _, raw = fetch_url_bytes(feed_url, timeout=timeout, max_bytes=30_000_000)
+            _, _, raw = fetch_url_bytes(feed_url, timeout=timeout, max_bytes=45_000_000)
             text = raw.decode("utf-8", errors="ignore")
             lines = [l.strip() for l in text.splitlines() if l.strip() and not l.startswith(("#", "!"))]
 
@@ -213,7 +219,8 @@ def _probe_single_target(item: tuple[str, int, str, str]) -> tuple[dict | None, 
     }
 
     try:
-        final_url, status, html = fetch_url_html(url, timeout=5.5, max_bytes=350_000)
+        req_timeout = 10.0 if source == "verified_consumer_fraud_registry" else 6.0
+        final_url, status, html = fetch_url_html(url, timeout=req_timeout, max_bytes=450_000)
         if status >= 400 or len(html) < 250:
             return None, catalog_entry
 
@@ -282,6 +289,16 @@ def build_probe_targets(feeds: dict, max_hagezi: int = 160, max_openphish: int =
         seen_hosts.add(d)
         targets.append((f"https://{d}/", 0, "brand_impersonation_scam", "jarelllama_scams"))
 
+    # 4b. Sample active firewall-blocked domains from CERT.pl and HaGeZi TIF
+    for d in feeds.get("cert_pl", [])[:40]:
+        if d not in seen_hosts:
+            seen_hosts.add(d)
+            targets.append((f"https://{d}/", 0, "firewall_threat_phish", "cert_pl"))
+    for d in feeds.get("hagezi_tif", [])[:40]:
+        if d not in seen_hosts:
+            seen_hosts.add(d)
+            targets.append((f"https://{d}/", 0, "firewall_threat_intel", "hagezi_tif"))
+
     # 5. Legitimate shopping, booking, banking, and portal targets (label = 1)
     for u in VERIFIED_LEGITIMATE_URLS:
         h = (urlparse(u).hostname or "").lower()
@@ -308,16 +325,25 @@ def discover_and_build(probe_live: bool = True, max_workers: int = 16) -> dict:
 
     feeds = fetch_threat_feeds()
 
-    # Build fast backend unauthorized-domain index (exclude any trusted domains)
+    # Build fast backend unauthorized-domain index (deduplicated across feeds to minimize size)
+    seen_idx: set[str] = set(VERIFIED_UNAUTHORIZED_SITES.keys())
+    def _dedup_feed(doms: list[str]) -> list[str]:
+        kept = [d for d in doms if d not in seen_idx]
+        seen_idx.update(kept)
+        return kept
+
     index_payload = {
         "verified": VERIFIED_UNAUTHORIZED_SITES,
-        "hagezi_fake": feeds.get("hagezi_fake", []),
-        "openphish_domains": feeds.get("openphish_domains", []),
-        "jarelllama_scams": feeds.get("jarelllama_scams", []),
+        "hagezi_fake": _dedup_feed(feeds.get("hagezi_fake", [])),
+        "openphish_domains": _dedup_feed(feeds.get("openphish_domains", [])),
+        "cert_pl": _dedup_feed(feeds.get("cert_pl", [])),
+        "phishing_database": _dedup_feed(feeds.get("phishing_database", [])),
+        "hagezi_tif": _dedup_feed(feeds.get("hagezi_tif", [])),
+        "jarelllama_scams": _dedup_feed(feeds.get("jarelllama_scams", [])),
     }
     with gzip.open(UNAUTHORIZED_INDEX_PATH, "wt", encoding="utf-8") as gz:
         json.dump(index_payload, gz)
-    print(f"Saved compressed unauthorized domain index -> {UNAUTHORIZED_INDEX_PATH}")
+    print(f"Saved compressed unauthorized domain index ({len(seen_idx):,} unique domains) -> {UNAUTHORIZED_INDEX_PATH}")
 
     # Build human-readable catalog of discovered unauthorized websites
     catalog_rows: list[dict] = []
@@ -378,6 +404,10 @@ def discover_and_build(probe_live: bool = True, max_workers: int = 16) -> dict:
     for u in feeds.get("openphish_urls", []):
         h = (urlparse(u).hostname or "").lower()
         _add_catalog_row(h, u, "active_phish_portal", "openphish", "Active phishing/deceptive portal in OpenPhish feed.")
+    for d in feeds.get("cert_pl", [])[:5000]:
+        _add_catalog_row(d, f"https://{d}/", "firewall_threat_phish", "cert_pl", "Flagged in CERT.pl verified malicious/phishing feed.")
+    for d in feeds.get("hagezi_tif", [])[:5000]:
+        _add_catalog_row(d, f"https://{d}/", "firewall_threat_intel", "hagezi_tif", "Blocked in HaGeZi Threat Intelligence Feed (malware/C2/phishing).")
 
     brand_scams_added = 0
     for d in feeds.get("jarelllama_scams", []):

@@ -1,304 +1,428 @@
 """
-backend/main.py — FastAPI Backend for Phishing URL Detection
+backend/main.py — FastAPI Backend for Multi-Layer Website Safety & Trust Assessment
 
-Serves the trained XGBoost model via a REST API.
-The Chrome Extension POSTs extracted page features here
-and receives a phishing probability score in response.
-
-Run with:
-    uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-Or from the project root:
-    python backend/main.py
+Provides:
+- GET /health, GET /version, GET /model-info, GET /analytics
+- POST /predict (Chrome Extension compatible + full multi-dimension assessment)
+- POST /analyze-url, POST /analyze-dom, POST /analyze-website, POST /scan, GET /scan
+- POST /explain (SHAP + rule + optional Groq XAI synthesis)
+- POST /feedback, GET /feedback (quarantined user feedback; never auto-promoted as labels)
+- GET /unauthorized-sites
 """
 
+from __future__ import annotations
+
+from collections import Counter
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import json
+import logging
 import os
 import sys
-import logging
-import uvicorn
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+import threading
+import uuid
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import uvicorn
 
-# Ensure the project root is in sys.path so src.* imports work
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
+from backend.explainer import compute_shap_attributions, generate_explanation
+from backend.predictor import PhishingPredictor
 from backend.schemas import (
+    AnalyzeDOMRequest,
     AnalyzeURLRequest,
-    AnalyzeURLResponse,
+    AnalyzeWebsiteRequest,
     ExplainRequest,
     ExplainResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
+    ModelInfoResponse,
     PredictionResponse,
     URLFeaturesRequest,
+    VersionResponse,
+    WebsiteAssessmentResponse,
 )
-from backend.predictor import PhishingPredictor
-from backend.explainer import generate_explanation
-from src.web_forensics import extract_phiusiil_features_from_html, fetch_url_html
+from backend.security import RateLimiter, SSRFBlockedError, safe_fetch_html, validate_safe_url
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+API_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.0.0"
+MAX_REQUEST_BYTES = 2_000_000
+FEEDBACK_FILE = os.path.join(PROJECT_ROOT, "data", "feedback", "reports.jsonl")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("PhishingAPI")
 
-# ---------------------------------------------------------------------------
-# Global predictor instance (loaded once at startup)
-# ---------------------------------------------------------------------------
-predictor: PhishingPredictor = None
+predictor: PhishingPredictor | None = None
+rate_limiter = RateLimiter()
+_stats_lock = threading.Lock()
+_analytics = {
+    "total_scans": 0,
+    "risk_distribution": Counter(),
+    "high_and_critical_count": 0,
+}
+
+
+def _record_scan_stat(risk_level: str):
+    """Store strictly anonymized aggregate statistics (never store user browsing history)."""
+    with _stats_lock:
+        _analytics["total_scans"] += 1
+        _analytics["risk_distribution"][risk_level] += 1
+        if risk_level in ("HIGH", "CRITICAL"):
+            _analytics["high_and_critical_count"] += 1
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the ML model on startup, release resources on shutdown."""
+    """Load ML models, encoders, and threat intelligence once on startup."""
     global predictor
-    logger.info("🚀 Starting PhishingDetection API — loading model artifacts...")
+    logger.info("Starting Website Safety API — loading URL/DOM models and threat intel...")
     models_dir = os.path.join(PROJECT_ROOT, "models")
     dataset_dir = os.path.join(PROJECT_ROOT, "dataset")
     predictor = PhishingPredictor(models_dir=models_dir, dataset_dir=dataset_dir)
     predictor.load()
-    logger.info("✅ Model loaded successfully. API is ready.")
+    logger.info("Models and threat intelligence ready.")
     yield
-    logger.info("🛑 Shutting down PhishingDetection API.")
+    logger.info("Shutting down Website Safety API.")
 
 
-# ---------------------------------------------------------------------------
-# FastAPI Application
-# ---------------------------------------------------------------------------
 app = FastAPI(
-    title="AI Phishing & Fake Login Page Detector",
+    title="AI-Powered Website Safety & Trust Assessment API",
     description=(
-        "REST API that accepts URL/page features extracted by the Chrome Extension "
-        "and returns a real-time phishing probability score using a trained XGBoost classifier."
+        "Multi-layer assessment combining URL ML, DOM Behaviour ML, Brand Impersonation, "
+        "Credential & Payment Risk, Threat Intelligence, and SHAP/Groq Explainable AI."
     ),
-    version="1.0.0",
+    version=API_VERSION,
     lifespan=lifespan,
 )
 
-# Allow Chrome Extension (chrome-extension://*) and local dev origins
+# Configurable CORS (never combine wildcard '*' with allow_credentials=True)
+raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
+allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()] if raw_origins else ["*"]
+allow_creds = "*" not in allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # In production, restrict to your extension origin
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_creds,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Accept", "Authorization"],
 )
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def security_guard_middleware(request: Request, call_next):
+    """Enforce payload size ceiling and per-client rate limiting."""
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "Request payload exceeds 2 MB limit."})
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(client_ip):
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again shortly."})
+
+    return await call_next(request)
+
 
 @app.get("/", tags=["Root"])
 async def root():
     return {
-        "message": "AI Phishing Detection API is running.",
+        "service": "AI-Powered Website Safety & Trust Assessment API",
+        "version": API_VERSION,
         "docs": "/docs",
         "health": "/health",
-        "predict": "POST /predict",
-        "analyze_url": "POST /analyze-url",
-        "scan": "GET /scan?url=...",
-        "unauthorized_sites": "GET /unauthorized-sites",
-        "discover": "POST /discover",
+        "endpoints": [
+            "GET /health", "GET /version", "GET /model-info", "GET /analytics",
+            "POST /predict", "POST /analyze-url", "POST /analyze-dom",
+            "POST /analyze-website", "POST /scan", "GET /scan",
+            "POST /explain", "POST /feedback", "GET /feedback", "GET /unauthorized-sites",
+        ],
     }
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
-    """Returns API and model health status."""
-    model_loaded = predictor is not None and predictor.is_ready()
+    ready = predictor is not None and predictor.is_ready()
     return HealthResponse(
-        status="ok" if model_loaded else "degraded",
-        model_loaded=model_loaded,
-        model_type=predictor.model_type() if model_loaded else "N/A",
-        feature_count=predictor.feature_count() if model_loaded else 0,
+        status="ok" if ready else "degraded",
+        model_loaded=ready,
+        url_model_loaded=predictor.url_model_ready() if predictor else False,
+        dom_model_loaded=predictor.dom_model_ready() if predictor else False,
+        model_type=predictor.model_type() if predictor else "N/A",
+        feature_count=predictor.feature_count() if predictor else 0,
+        threat_intel_loaded=bool(predictor and predictor.intel.loaded),
     )
 
 
-@app.post("/predict", response_model=PredictionResponse, tags=["Prediction"])
+@app.get("/version", response_model=VersionResponse, tags=["Metadata"])
+async def get_version():
+    manifest_models = (predictor.manifest.get("models") if predictor else {}) or {}
+    return VersionResponse(
+        api_version=API_VERSION,
+        url_model_version=str((manifest_models.get("url_risk") or {}).get("version", "v2.0.0")),
+        dom_model_version=str((manifest_models.get("dom_behavior") or {}).get("version", "v2.0.0")),
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+@app.get("/model-info", response_model=ModelInfoResponse, tags=["Metadata"])
+async def get_model_info():
+    if predictor is None:
+        raise HTTPException(status_code=503, detail="Models not initialized.")
+    return ModelInfoResponse(
+        active_manifest=predictor.manifest,
+        url_feature_count=len(predictor._url_features),
+        dom_feature_count=len(predictor._dom_features),
+        threat_intel_status=predictor.intel.status_summary(),
+    )
+
+
+@app.post("/predict", response_model=PredictionResponse, tags=["Assessment"])
 async def predict(request: URLFeaturesRequest):
-    """
-    Accepts extracted URL/page features and returns a phishing prediction.
-
-    - **is_phishing**: True if the page is classified as phishing.
-    - **phishing_probability**: Confidence score (0.0 – 1.0) that the page is phishing.
-    - **legitimate_probability**: Confidence score that the page is legitimate.
-    - **verdict**: Human-readable verdict string.
-    - **risk_level**: 'HIGH', 'MEDIUM', or 'LOW'.
-    """
+    """Chrome Extension assessment endpoint (backward compatible + rich risk breakdown)."""
     if predictor is None or not predictor.is_ready():
-        raise HTTPException(
-            status_code=503,
-            detail="Model is not loaded. Please restart the server and ensure model artifacts exist.",
-        )
-
+        raise HTTPException(status_code=503, detail="Models are not loaded.")
     try:
-        result = predictor.predict(request.dict())
-        logger.info(
-            f"Prediction for URL (len={request.URLLength}): "
-            f"{result['verdict']} | confidence={result['phishing_probability']:.3f}"
-        )
+        payload = request.model_dump()
+        result = predictor.predict(payload, deep_scan=True)
+        _record_scan_stat(result["risk_level"])
         return PredictionResponse(**result)
     except Exception as e:
-        logger.error(f"Prediction error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        logger.error(f"/predict error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Prediction failed.")
+
+
+def _build_assessment_response(raw_assessment: dict) -> WebsiteAssessmentResponse:
+    pub = {k: v for k, v in raw_assessment.items() if not k.startswith("_")}
+    return WebsiteAssessmentResponse(**pub)
+
+
+def _normalize_input_url(raw_url: str) -> str:
+    clean = (raw_url or "").strip()
+    if clean and "://" not in clean and not clean.lower().startswith(("file:", "javascript:", "data:", "vbscript:")):
+        clean = f"https://{clean}"
+    return clean
+
+
+@app.post("/analyze-url", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
+async def analyze_url(request: AnalyzeURLRequest):
+    """Analyze a URL using URL ML, Brand Impersonation, Threat Intel, and optional SSRF-safe live fetch."""
+    if predictor is None or not predictor.is_ready():
+        raise HTTPException(status_code=503, detail="Models are not loaded.")
+
+    clean_url = _normalize_input_url(request.url)
+
+    try:
+        validate_safe_url(clean_url, resolve_dns=request.fetch_live)
+    except SSRFBlockedError as se:
+        raise HTTPException(status_code=400, detail=f"URL rejected by SSRF guard: {se}")
+
+    html = None
+    redirect_chain = None
+    if request.fetch_live:
+        try:
+            final_url, status, fetched_html, redirect_chain = safe_fetch_html(clean_url)
+            clean_url = final_url
+            if status < 400:
+                html = fetched_html
+        except SSRFBlockedError as se:
+            raise HTTPException(status_code=400, detail=f"Blocked by SSRF guard: {se}")
+        except Exception as e:
+            logger.info(f"Live fetch skipped for {clean_url}: {e}")
+
+    res = predictor.assess_website(
+        url=clean_url,
+        html=html,
+        redirect_chain=redirect_chain,
+        deep_scan=request.deep_scan,
+    )
+    _record_scan_stat(res["overall_risk_level"])
+    return _build_assessment_response(res)
+
+
+@app.post("/analyze-dom", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
+async def analyze_dom(request: AnalyzeDOMRequest):
+    """Analyze DOM behaviour either from static HTML or structured DOMFeaturesPayload."""
+    if predictor is None or not predictor.is_ready():
+        raise HTTPException(status_code=503, detail="Models are not loaded.")
+    if not request.html and not request.dom_features:
+        raise HTTPException(status_code=400, detail="Provide either 'html' or 'dom_features'.")
+
+    dom_dict = request.dom_features.model_dump() if request.dom_features else None
+    res = predictor.assess_website(
+        url=request.url,
+        dom_features=dom_dict,
+        html=request.html,
+        deep_scan=False,
+    )
+    _record_scan_stat(res["overall_risk_level"])
+    return _build_assessment_response(res)
+
+
+@app.post("/analyze-website", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
+async def analyze_website(request: AnalyzeWebsiteRequest):
+    """Comprehensive multi-layer website safety assessment across URL, DOM, Brand, Payment & Threat Intel."""
+    if predictor is None or not predictor.is_ready():
+        raise HTTPException(status_code=503, detail="Models are not loaded.")
+
+    clean_url = _normalize_input_url(request.url)
+
+    try:
+        validate_safe_url(clean_url, resolve_dns=request.fetch_live)
+    except SSRFBlockedError as se:
+        raise HTTPException(status_code=400, detail=f"URL rejected by SSRF guard: {se}")
+
+    html = request.html
+    redirect_chain = list(request.redirect_chain or [])
+    if request.fetch_live and not html:
+        try:
+            final_url, status, fetched_html, fetched_chain = safe_fetch_html(clean_url)
+            clean_url = final_url
+            redirect_chain = fetched_chain
+            if status < 400:
+                html = fetched_html
+        except SSRFBlockedError as se:
+            raise HTTPException(status_code=400, detail=f"Blocked by SSRF guard: {se}")
+        except Exception as e:
+            logger.info(f"Live fetch skipped for {clean_url}: {e}")
+
+    dom_dict = request.dom_features.model_dump() if request.dom_features else None
+    res = predictor.assess_website(
+        url=clean_url,
+        dom_features=dom_dict,
+        html=html,
+        redirect_chain=redirect_chain,
+        deep_scan=request.deep_scan,
+    )
+    _record_scan_stat(res["overall_risk_level"])
+    return _build_assessment_response(res)
+
+
+@app.post("/scan", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
+async def scan_post(request: AnalyzeURLRequest):
+    """SSRF-safe live URL scan (POST)."""
+    req = AnalyzeURLRequest(url=request.url, fetch_live=True, deep_scan=request.deep_scan)
+    return await analyze_url(req)
+
+
+@app.get("/scan", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
+async def scan_get(url: str, deep_scan: bool = True):
+    """SSRF-safe live URL scan (GET convenience endpoint)."""
+    return await analyze_url(AnalyzeURLRequest(url=url, fetch_live=True, deep_scan=deep_scan))
 
 
 @app.post("/explain", response_model=ExplainResponse, tags=["Explainable AI"])
 async def explain(request: ExplainRequest):
-    """
-    Explainable AI (XAI) Endpoint:
-    Provides a detailed incident breakdown of why a website was flagged or deemed safe.
-    Utilizes Groq AI API, with intelligent rule-based technical feature attribution as fallback.
-    """
+    """Generate SHAP/feature-attribution + rule + optional Groq XAI breakdown."""
     try:
-        merged_features = dict(request.features or {})
-        if predictor is not None and predictor.is_ready() and (request.url or request.hostname):
-            try:
-                fast_intel = predictor.intel.inspect_domain(
-                    request.url,
-                    request.hostname or "",
-                    merged_features,
-                    deep_scan=not predictor.intel.is_trusted(request.hostname or ""),
-                    use_ai_audit=False,
-                )
-                if fast_intel.get("indicators"):
-                    merged_features["_backend_indicators"] = fast_intel["indicators"]
-            except Exception:
-                pass
+        attributions = []
+        if predictor is not None and predictor.is_ready() and request.url:
+            if predictor.url_model_ready() and "url_length" in predictor._url_features:
+                df_u = predictor.prepare_url_dataframe(request.url)
+                attributions.extend(compute_shap_attributions(predictor._url_model, df_u, top_k=3))
+            if predictor.dom_model_ready() and request.features:
+                df_d = predictor.prepare_dom_dataframe(request.features, url=request.url)
+                attributions.extend(compute_shap_attributions(predictor._dom_model, df_d, top_k=3))
 
-        explanation_data = generate_explanation(
+        exp = generate_explanation(
             url=request.url,
-            hostname=request.hostname,
-            is_phishing=request.is_phishing,
-            risk_level=request.risk_level,
-            phishing_prob=request.phishing_probability,
-            features_dict=merged_features,
-            api_key=request.groq_api_key or request.gemini_api_key,
+            hostname=request.hostname or (urlparse(request.url).hostname or ""),
+            is_phishing=bool(request.is_phishing),
+            risk_level=request.risk_level or "HIGH",
+            phishing_prob=float(request.phishing_probability or 0.5),
+            features_dict=request.features or {},
+            api_key=request.groq_api_key,
+            assessment=request.assessment,
+            attributions=attributions,
         )
-        return ExplainResponse(**explanation_data)
+        return ExplainResponse(**exp)
     except Exception as e:
-        logger.error(f"Explanation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
+        logger.error(f"/explain error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Explanation generation failed.")
 
 
-def _run_direct_url_scan(target_url: str, use_ai_audit: bool = True) -> AnalyzeURLResponse:
-    """Shared backend URL analyzer used by both POST /analyze-url and GET /scan."""
-    if predictor is None or not predictor.is_ready():
-        raise HTTPException(status_code=503, detail="Model is not loaded.")
-
-    clean_url = target_url.strip()
-    if not clean_url.startswith(("http://", "https://")):
-        clean_url = f"https://{clean_url}"
-
-    from urllib.parse import urlparse
-    parsed = urlparse(clean_url)
-    host = (parsed.hostname or "").lower()
-    if not host:
-        raise HTTPException(status_code=400, detail="Invalid URL provided.")
-
-    features_dict: dict = {"url": clean_url, "URL": clean_url, "hostname": host, "Domain": host}
-    try:
-        final_url, status, html = fetch_url_html(clean_url, timeout=6.0, max_bytes=350_000)
-        if status < 400 and html and len(html) >= 200:
-            extracted = extract_phiusiil_features_from_html(final_url or clean_url, html, label=1)
-            if extracted:
-                features_dict.update(extracted)
-                features_dict["url"] = final_url or clean_url
-                features_dict["hostname"] = (urlparse(features_dict["url"]).hostname or host).lower()
-    except Exception as e:
-        logger.info(f"Live HTML fetch skipped for {clean_url}: {e}")
-
-    pred = predictor.predict(features_dict, deep_scan=True, use_ai_audit=use_ai_audit)
-    intel_info = (
-        {}
-        if pred["whitelisted"]
-        else predictor.intel.inspect_domain(
-            features_dict["url"],
-            features_dict["hostname"],
-            features_dict,
-            deep_scan=True,
-            use_ai_audit=use_ai_audit,
-        )
-    )
-
-    exp = generate_explanation(
-        url=features_dict["url"],
-        hostname=features_dict["hostname"],
-        is_phishing=pred["is_phishing"],
-        risk_level=pred["risk_level"],
-        phishing_prob=pred["phishing_probability"],
-        features_dict={**features_dict, "_backend_indicators": pred["top_indicators"]},
-    )
-
-    forensics = intel_info.get("forensics") or {}
-    return AnalyzeURLResponse(
-        url=features_dict["url"],
-        hostname=features_dict["hostname"],
-        is_unauthorized_or_phishing=pred["is_phishing"],
-        risk_probability=pred["phishing_probability"],
-        legitimate_probability=pred["legitimate_probability"],
-        verdict=pred["verdict"],
-        risk_level=pred["risk_level"],
-        whitelisted=pred["whitelisted"],
-        tranco_rank=intel_info.get("tranco_rank"),
-        domain_age_days=(intel_info.get("rdap") or {}).get("domain_age_days"),
-        registry_match=intel_info.get("registry_match") or {},
-        forensic_summary={
-            "is_commerce_or_portal": forensics.get("is_commerce_or_portal"),
-            "official_emails": forensics.get("official_emails"),
-            "free_emails": forensics.get("free_emails"),
-            "has_corp_id": forensics.get("has_corp_id"),
-            "has_prepaid": forensics.get("has_prepaid"),
-            "has_cod": forensics.get("has_cod"),
-            "restrictive_refund_clauses": forensics.get("restrictive_refund_clauses"),
-            "forensic_risk_score": forensics.get("forensic_risk_score"),
-        },
-        ai_audit=intel_info.get("ai_audit"),
-        top_indicators=pred["top_indicators"],
-        explanation=exp.get("explanation", ""),
+@app.post("/feedback", response_model=FeedbackResponse, tags=["Feedback & Monitoring"])
+async def submit_feedback(request: FeedbackRequest):
+    """
+    Store user-submitted false positive or missed threat reports in a human-review queue.
+    Unverified reports are NEVER automatically promoted into training datasets.
+    """
+    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
+    parsed = urlparse(request.url.strip())
+    record = {
+        "report_id": str(uuid.uuid4()),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "domain": (parsed.hostname or "").lower(),
+        "url": request.url.strip()[:2048],
+        "report_type": request.report_type,
+        "reported_risk_level": request.reported_risk_level,
+        "expected_category": request.expected_category,
+        "notes": (request.notes or "").strip()[:1000],
+        "verification_status": "pending_human_review",
+    }
+    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    return FeedbackResponse(
+        status="recorded",
+        report_id=record["report_id"],
+        verification_status="pending_human_review",
+        message="Feedback logged for human verification before any dataset retraining.",
     )
 
 
-@app.post("/analyze-url", response_model=AnalyzeURLResponse, tags=["Unauthorized Website Scanner"])
-async def analyze_url(request: AnalyzeURLRequest):
-    """Fetch, inspect, and evaluate any URL directly on the backend (ML + RDAP + TLS + Forensics + AI)."""
-    return _run_direct_url_scan(request.url, use_ai_audit=request.use_ai_audit)
+@app.get("/feedback", tags=["Feedback & Monitoring"])
+async def list_feedback_summary():
+    """Return aggregate feedback counts (avoids exposing raw user browsing URLs)."""
+    counts: Counter = Counter()
+    total = 0
+    if os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    counts[item.get("report_type", "unknown")] += 1
+                    total += 1
+    return {"total_reports": total, "by_type": dict(counts)}
 
 
-@app.get("/scan", response_model=AnalyzeURLResponse, tags=["Unauthorized Website Scanner"])
-async def scan_url(url: str, use_ai_audit: bool = True):
-    """GET convenience endpoint to scan any target URL from browser/CLI/Swagger UI."""
-    return _run_direct_url_scan(url, use_ai_audit=use_ai_audit)
+@app.get("/analytics", tags=["Feedback & Monitoring"])
+async def get_analytics():
+    """Return anonymized aggregate scan statistics, model version, and threat feed status."""
+    fb = await list_feedback_summary()
+    manifest_models = (predictor.manifest.get("models") if predictor else {}) or {}
+    with _stats_lock:
+        snapshot = {
+            "total_scans": _analytics["total_scans"],
+            "risk_distribution": dict(_analytics["risk_distribution"]),
+            "high_and_critical_count": _analytics["high_and_critical_count"],
+        }
+    snapshot.update({
+        "feedback_stats": fb,
+        "backend_health": "ok" if (predictor and predictor.is_ready()) else "degraded",
+        "url_model_version": (manifest_models.get("url_risk") or {}).get("version", "v2.0.0"),
+        "dom_model_version": (manifest_models.get("dom_behavior") or {}).get("version", "v2.0.0"),
+        "threat_intel_status": predictor.intel.status_summary() if predictor else {},
+    })
+    return snapshot
 
 
-@app.get("/unauthorized-sites", tags=["Unauthorized Website Discovery"])
+@app.get("/unauthorized-sites", tags=["Threat Intelligence"])
 async def list_unauthorized_sites(q: str = "", category: str = "", limit: int = 50):
-    """Search and list real-world unauthorized, fake-shopping, and scam websites discovered by the backend."""
     if predictor is None:
         raise HTTPException(status_code=503, detail="Backend is initializing.")
     sites = predictor.intel.search_catalog(query=q, category=category, limit=limit)
     return {"count": len(sites), "sites": sites}
 
 
-@app.post("/discover", tags=["Unauthorized Website Discovery"])
-async def refresh_discovery(probe_live: bool = False):
-    """Refresh threat/fake-shop feeds and reload the backend's unauthorized website registry."""
-    from src.discover_unauthorized_sites import discover_and_build
-    summary = discover_and_build(probe_live=probe_live)
-    if predictor is not None:
-        predictor.intel.load()
-    return {"status": "refreshed", "summary": summary}
-
-
-# ---------------------------------------------------------------------------
-# Entry point (works both locally and on Render)
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    reload_flag = os.environ.get("RENDER") is None  # disable reload on Render
+    reload_flag = os.environ.get("RENDER") is None and os.environ.get("DOCKER_ENV") is None
     uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=reload_flag)

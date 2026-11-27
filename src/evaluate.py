@@ -8,37 +8,41 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, 
-    roc_auc_score, confusion_matrix, classification_report, roc_curve
+    roc_auc_score, average_precision_score, confusion_matrix, classification_report, roc_curve
 )
 
 def calculate_metrics(y_true, y_pred, y_prob, logger):
     """
-    Calculates accuracy, precision, recall, f1, and roc auc.
-    
-    Args:
-        y_true (array-like): Ground truth target values.
-        y_pred (array-like): Predicted class labels.
-        y_prob (array-like): Predicted probabilities.
-        logger (logging.Logger): Logger instance.
-        
-    Returns:
-        dict: Dictionary of metrics.
+    Calculates accuracy, precision, recall, f1, roc auc, pr auc, FPR, and FNR.
+    Note: class 1 = benign/legitimate, class 0 = risky/phishing.
     """
     metrics = {}
-    metrics["Accuracy"] = accuracy_score(y_true, y_pred)
-    metrics["Precision"] = precision_score(y_true, y_pred, zero_division=0)
-    metrics["Recall"] = recall_score(y_true, y_pred, zero_division=0)
-    metrics["F1 Score"] = f1_score(y_true, y_pred, zero_division=0)
+    metrics["Accuracy"] = float(accuracy_score(y_true, y_pred))
+    metrics["Precision"] = float(precision_score(y_true, y_pred, zero_division=0))
+    metrics["Recall"] = float(recall_score(y_true, y_pred, zero_division=0))
+    metrics["F1 Score"] = float(f1_score(y_true, y_pred, zero_division=0))
     
     if y_prob is not None:
         try:
-            metrics["ROC AUC"] = roc_auc_score(y_true, y_prob)
+            metrics["ROC AUC"] = float(roc_auc_score(y_true, y_prob))
+            # Threat-class (class 0) PR-AUC
+            y_threat = (np.asarray(y_true) == 0).astype(int)
+            metrics["PR AUC"] = float(average_precision_score(y_threat, 1.0 - np.asarray(y_prob)))
         except Exception as e:
-            logger.warning(f"Could not calculate ROC AUC: {e}")
+            logger.warning(f"Could not calculate ROC/PR AUC: {e}")
             metrics["ROC AUC"] = np.nan
+            metrics["PR AUC"] = np.nan
     else:
         metrics["ROC AUC"] = np.nan
-        
+        metrics["PR AUC"] = np.nan
+
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+    # Threat detection viewpoint: threat=0, benign=1
+    # False positive = benign(1) misclassified as threat(0) -> fn / (fn + tp)
+    # False negative = threat(0) misclassified as benign(1) -> fp / (tn + fp)
+    metrics["FPR"] = float(fn / max(1, fn + tp))
+    metrics["FNR"] = float(fp / max(1, tn + fp))
     return metrics
 
 def plot_confusion_matrix(y_true, y_pred, model_name, save_dir="reports"):

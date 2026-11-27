@@ -1,0 +1,67 @@
+{
+  "role": "url_risk",
+  "version": "v2.0.0",
+  "algorithm": "HistGradientBoosting",
+  "created_at": "2026-11-27T17:22:07.774833+00:00",
+  "feature_count": 27,
+  "feature_columns": [
+    "url_length",
+    "domain_length",
+    "path_length",
+    "query_length",
+    "num_subdomains",
+    "num_dots",
+    "num_hyphens_domain",
+    "num_digits_url",
+    "num_digits_domain",
+    "num_special_chars",
+    "is_ip_address",
+    "is_punycode_or_idn",
+    "has_unusual_port",
+    "is_url_shortener",
+    "has_url_obfuscation",
+    "url_entropy",
+    "domain_entropy",
+    "tld_length",
+    "is_suspicious_tld",
+    "suspicious_keyword_count",
+    "is_https",
+    "brand_similarity_score",
+    "typosquat_edit_distance",
+    "char_continuation_rate",
+    "letter_ratio",
+    "digit_ratio",
+    "tld"
+  ],
+  "metrics": {
+    "CV F1 (Domain-Grouped)": 0.9694,
+    "Val F1": 0.9696,
+    "Accuracy": 0.968638284042899,
+    "Precision": 0.9537953795379538,
+    "Recall": 0.9850673591949359,
+    "F1 Score": 0.9691791759821143,
+    "ROC AUC": 0.9884432602346234,
+    "PR AUC": 0.9916847204938185,
+    "FPR": 0.014932640805064113,
+    "FNR": 0.04782820888238165,
+    "Training Time (s)": 7.286
+  },
+  "dataset_lineage": {
+    "train_rows": 42668,
+    "val_rows": 6129,
+    "test_rows": 12308,
+    "sources": {
+      "phiusiil": 41928,
+      "phreshphish": 570,
+      "openphish": 108,
+      "tranco_vetted": 55,
+      "custom_verified_fixture": 6,
+      "verified_consumer_fraud_registry": 1
+    },
+    "split_strategy": "domain_grouped_GroupShuffleSplit"
+  },
+  "promotion_passed": true,
+  "promotion_gate_notes": [
+    "All validation gates passed."
+  ]
+}

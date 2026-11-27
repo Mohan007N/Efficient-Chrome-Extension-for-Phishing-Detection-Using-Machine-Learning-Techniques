@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: phishing-detection-api
+    name: webshield-website-safety-api
     runtime: python
     region: oregon
     plan: free
@@ -9,7 +9,11 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
-      - key: OPENROUTER_API_KEY
-        sync: false          # manually set in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: RATE_LIMIT_PER_MIN
+        value: "180"
     healthCheckPath: /health
     autoDeploy: true

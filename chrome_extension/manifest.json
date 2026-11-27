@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Phishing Shield",
-  "version": "1.0.0",
-  "description": "Real-time phishing and fake login page detection powered by XGBoost AI. Protects you from credential theft.",
+  "name": "WebShield AI — Website Safety & Trust Assessment",
+  "version": "2.0.0",
+  "description": "Multi-layer AI website safety assessment analyzing URLs, DOM behaviour, brand impersonation, credential & payment risks, and threat intelligence.",
 
   "permissions": [
     "activeTab",
@@ -13,7 +13,8 @@
   ],
 
   "host_permissions": [
-    "<all_urls>"
+    "https://*/*",
+    "http://*/*"
   ],
 
   "background": {
@@ -22,7 +23,7 @@
 
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["http://*/*", "https://*/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -36,7 +37,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "AI Phishing Shield"
+    "default_title": "WebShield AI — Website Safety"
   },
 
   "icons": {

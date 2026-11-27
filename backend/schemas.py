@@ -1,166 +1,235 @@
 """
-backend/schemas.py — Pydantic models for request/response validation.
-
-These models define exactly what the Chrome Extension must send (URLFeaturesRequest)
-and what the API will return (PredictionResponse).
+backend/schemas.py — Pydantic v2 Request & Response Models for Website Safety API
 """
 
+from __future__ import annotations
+
+from typing import Any, Optional
 from pydantic import BaseModel, Field
-from typing import Optional
+
+
+class DOMFeaturesPayload(BaseModel):
+    """Structured DOM & HTML behaviour telemetry (never contains passwords, values, cookies, or tokens)."""
+
+    num_password_fields: int = Field(default=0, ge=0)
+    num_username_email_inputs: int = Field(default=0, ge=0)
+    num_login_forms: int = Field(default=0, ge=0)
+    has_external_form_action: int = Field(default=0, ge=0, le=1)
+    num_cross_domain_forms: int = Field(default=0, ge=0)
+    num_hidden_credential_inputs: int = Field(default=0, ge=0)
+    suspicious_login_indicators: int = Field(default=0, ge=0)
+    brand_domain_mismatch: int = Field(default=0, ge=0, le=1)
+
+    total_forms: int = Field(default=0, ge=0)
+    external_forms_count: int = Field(default=0, ge=0)
+    has_post_form: int = Field(default=0, ge=0, le=1)
+    num_sensitive_inputs: int = Field(default=0, ge=0)
+    num_payment_inputs: int = Field(default=0, ge=0)
+    has_suspicious_payment_dest: int = Field(default=0, ge=0, le=1)
+    has_prepaid_without_cod: int = Field(default=0, ge=0, le=1)
+    has_restrictive_refund_terms: int = Field(default=0, ge=0, le=1)
+
+    num_iframes: int = Field(default=0, ge=0)
+    num_hidden_iframes: int = Field(default=0, ge=0)
+    num_external_scripts: int = Field(default=0, ge=0)
+    popup_trigger_count: int = Field(default=0, ge=0)
+    fake_download_button_count: int = Field(default=0, ge=0)
+    suspicious_link_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    meta_refresh_redirects: int = Field(default=0, ge=0)
+    js_redirect_indicators: int = Field(default=0, ge=0)
+    misleading_button_count: int = Field(default=0, ge=0)
+    external_link_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    notification_prompt_requested: int = Field(default=0, ge=0, le=1)
+
+    inline_script_count: int = Field(default=0, ge=0)
+    suspicious_inline_js_count: int = Field(default=0, ge=0)
+    obfuscated_js_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    dynamic_dom_mutation_count: int = Field(default=0, ge=0)
+    html_line_count: int = Field(default=0, ge=0)
+    has_title: int = Field(default=0, ge=0, le=1)
+    domain_title_match_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    has_copyright_notice: int = Field(default=0, ge=0, le=1)
+    has_official_contact_cue: int = Field(default=0, ge=0, le=1)
+
+    is_https: int = Field(default=1, ge=0, le=1)
+    mixed_content_count: int = Field(default=0, ge=0)
+    cross_origin_iframes_uninspected: int = Field(default=0, ge=0)
+    unavailable_signals: list[str] = Field(default_factory=list)
 
 
 class URLFeaturesRequest(BaseModel):
     """
-    All 48 features extracted from a URL + its page content.
-    The Chrome Extension content script computes these values
-    and sends them as a JSON POST body.
-
-    All fields have sensible defaults so the extension can send
-    partial feature sets — missing features fall back to 0.
+    Backward-compatible Chrome Extension /predict payload + optional rich dom_features.
+    All numeric fields have safe defaults.
     """
 
-    # ── Metadata (for whitelist check) ─────────────────────────────────────
-    url: str = Field(default="", description="Full URL of the page being scanned")
-    hostname: str = Field(default="", description="Hostname extracted from the URL")
+    url: str = Field(default="", max_length=2048)
+    hostname: str = Field(default="", max_length=512)
 
-    # ── URL Structure Features ──────────────────────────────────────────────
-    URLLength: int = Field(default=0, description="Total character length of the URL")
-    DomainLength: int = Field(default=0, description="Character length of the domain part")
-    IsDomainIP: int = Field(default=0, description="1 if domain is an IP address, else 0")
-    TLD: str = Field(default="com", description="Top-Level Domain (e.g. 'com', 'xyz', 'net')")
-    TLDLength: int = Field(default=3, description="Length of the TLD string")
-    NoOfSubDomain: int = Field(default=0, description="Number of subdomains in the URL")
+    URLLength: int = Field(default=0, ge=0)
+    DomainLength: int = Field(default=0, ge=0)
+    IsDomainIP: int = Field(default=0, ge=0, le=1)
+    TLD: str = Field(default="com", max_length=64)
+    TLDLength: int = Field(default=3, ge=0)
+    NoOfSubDomain: int = Field(default=0, ge=0)
 
-    # ── URL Character Analysis ───────────────────────────────────────────────
-    HasObfuscation: int = Field(default=0, description="1 if obfuscated characters are detected")
-    NoOfObfuscatedChar: int = Field(default=0, description="Count of obfuscated characters")
-    ObfuscationRatio: float = Field(default=0.0, description="Ratio of obfuscated chars to total")
-    NoOfLettersInURL: int = Field(default=0, description="Count of alphabetic characters in URL")
-    LetterRatioInURL: float = Field(default=0.0, description="Ratio of letters to URL length")
-    NoOfDegitsInURL: int = Field(default=0, description="Count of digit characters in URL")
-    DegitRatioInURL: float = Field(default=0.0, description="Ratio of digits to URL length")
-    NoOfEqualsInURL: int = Field(default=0, description="Count of '=' characters in URL")
-    NoOfQMarkInURL: int = Field(default=0, description="Count of '?' characters in URL")
-    NoOfAmpersandInURL: int = Field(default=0, description="Count of '&' characters in URL")
-    NoOfOtherSpecialCharsInURL: int = Field(default=0, description="Count of other special chars")
-    SpacialCharRatioInURL: float = Field(default=0.0, description="Ratio of special chars to URL length")
-    CharContinuationRate: float = Field(default=0.0, description="Rate of character continuation patterns")
+    HasObfuscation: int = Field(default=0, ge=0, le=1)
+    NoOfObfuscatedChar: int = Field(default=0, ge=0)
+    ObfuscationRatio: float = Field(default=0.0, ge=0.0)
+    NoOfLettersInURL: int = Field(default=0, ge=0)
+    LetterRatioInURL: float = Field(default=0.0, ge=0.0)
+    NoOfDegitsInURL: int = Field(default=0, ge=0)
+    DegitRatioInURL: float = Field(default=0.0, ge=0.0)
+    NoOfEqualsInURL: int = Field(default=0, ge=0)
+    NoOfQMarkInURL: int = Field(default=0, ge=0)
+    NoOfAmpersandInURL: int = Field(default=0, ge=0)
+    NoOfOtherSpecialCharsInURL: int = Field(default=0, ge=0)
+    SpacialCharRatioInURL: float = Field(default=0.0, ge=0.0)
+    CharContinuationRate: float = Field(default=0.0, ge=0.0)
 
-    # ── Security & Protocol ──────────────────────────────────────────────────
-    IsHTTPS: int = Field(default=0, description="1 if the URL uses HTTPS, else 0")
+    IsHTTPS: int = Field(default=1, ge=0, le=1)
+    LineOfCode: int = Field(default=0, ge=0)
+    LargestLineLength: int = Field(default=0, ge=0)
+    HasTitle: int = Field(default=0, ge=0, le=1)
+    DomainTitleMatchScore: float = Field(default=0.0, ge=0.0)
+    URLTitleMatchScore: float = Field(default=0.0, ge=0.0)
+    HasFavicon: int = Field(default=0, ge=0, le=1)
+    Robots: int = Field(default=0, ge=0, le=1)
+    IsResponsive: int = Field(default=0, ge=0, le=1)
+    NoOfURLRedirect: int = Field(default=0, ge=0)
+    NoOfSelfRedirect: int = Field(default=0, ge=0)
+    HasDescription: int = Field(default=0, ge=0, le=1)
+    NoOfPopup: int = Field(default=0, ge=0)
+    NoOfiFrame: int = Field(default=0, ge=0)
+    HasExternalFormSubmit: int = Field(default=0, ge=0, le=1)
+    HasSocialNet: int = Field(default=0, ge=0, le=1)
+    HasSubmitButton: int = Field(default=0, ge=0, le=1)
+    HasHiddenFields: int = Field(default=0, ge=0, le=1)
+    HasPasswordField: int = Field(default=0, ge=0, le=1)
 
-    # ── Page Content / DOM Features ──────────────────────────────────────────
-    LineOfCode: int = Field(default=0, description="Total lines of HTML source code")
-    LargestLineLength: int = Field(default=0, description="Length of the longest HTML line")
-    HasTitle: int = Field(default=0, description="1 if the page has a <title> tag")
-    DomainTitleMatchScore: float = Field(default=0.0, description="Score measuring domain-title similarity")
-    URLTitleMatchScore: float = Field(default=0.0, description="Score measuring URL-title similarity")
-    HasFavicon: int = Field(default=0, description="1 if the page has a favicon")
-    Robots: int = Field(default=0, description="1 if robots.txt exists and is accessible")
-    IsResponsive: int = Field(default=0, description="1 if the page has a responsive viewport meta tag")
-    NoOfURLRedirect: int = Field(default=0, description="Number of URL redirects observed")
-    NoOfSelfRedirect: int = Field(default=0, description="Number of self-referential redirects")
-    HasDescription: int = Field(default=0, description="1 if the page has a meta description tag")
-    NoOfPopup: int = Field(default=0, description="Number of popup calls (window.open) in scripts")
-    NoOfiFrame: int = Field(default=0, description="Number of <iframe> tags on the page")
-    HasExternalFormSubmit: int = Field(default=0, description="1 if a form submits to an external domain")
-    HasSocialNet: int = Field(default=0, description="1 if social network links are present")
-    HasSubmitButton: int = Field(default=0, description="1 if the page has a submit button")
-    HasHiddenFields: int = Field(default=0, description="1 if the page has hidden input fields")
-    HasPasswordField: int = Field(default=0, description="1 if the page has a password input field")
+    Bank: int = Field(default=0, ge=0, le=1)
+    Pay: int = Field(default=0, ge=0, le=1)
+    Crypto: int = Field(default=0, ge=0, le=1)
+    HasCopyrightInfo: int = Field(default=0, ge=0, le=1)
 
-    # ── Content Keywords ─────────────────────────────────────────────────────
-    Bank: int = Field(default=0, description="1 if banking-related keywords are present in page content")
-    Pay: int = Field(default=0, description="1 if payment-related keywords are present")
-    Crypto: int = Field(default=0, description="1 if crypto-related keywords are present")
-    HasCopyrightInfo: int = Field(default=0, description="1 if the page contains copyright notice")
+    NoOfImage: int = Field(default=0, ge=0)
+    NoOfCSS: int = Field(default=0, ge=0)
+    NoOfJS: int = Field(default=0, ge=0)
+    NoOfSelfRef: int = Field(default=0, ge=0)
+    NoOfEmptyRef: int = Field(default=0, ge=0)
+    NoOfExternalRef: int = Field(default=0, ge=0)
 
-    # ── Resource Counts ──────────────────────────────────────────────────────
-    NoOfImage: int = Field(default=0, description="Number of <img> tags on the page")
-    NoOfCSS: int = Field(default=0, description="Number of external CSS stylesheet links")
-    NoOfJS: int = Field(default=0, description="Number of external JavaScript includes")
-    NoOfSelfRef: int = Field(default=0, description="Number of self-referential links (same domain)")
-    NoOfEmptyRef: int = Field(default=0, description="Number of empty href='#' or href='' links")
-    NoOfExternalRef: int = Field(default=0, description="Number of links pointing to external domains")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "URLLength": 35,
-                "DomainLength": 21,
-                "IsDomainIP": 0,
-                "TLD": "xyz",
-                "IsHTTPS": 0,
-                "HasPasswordField": 1,
-                "NoOfiFrame": 2,
-                "HasExternalFormSubmit": 1,
-                "Bank": 1,
-                "HasHiddenFields": 1,
-                "HasSubmitButton": 1,
-            }
-        }
+    dom_features: Optional[DOMFeaturesPayload] = None
+    redirect_chain: list[str] = Field(default_factory=list)
 
 
 class PredictionResponse(BaseModel):
-    """Response returned by the /predict endpoint."""
-    is_phishing: bool = Field(description="True if page is classified as phishing")
-    phishing_probability: float = Field(description="Probability (0.0–1.0) of being phishing")
-    legitimate_probability: float = Field(description="Probability (0.0–1.0) of being legitimate")
-    verdict: str = Field(description="Human-readable verdict")
-    risk_level: str = Field(description="Risk level: HIGH, MEDIUM, LOW, or SAFE")
-    whitelisted: bool = Field(default=False, description="True if domain is in the trusted whitelist")
-    top_indicators: list[str] = Field(default_factory=list, description="Top red flags or reasons for classification")
+    """Backward-compatible response extended with multi-dimension Website Safety assessment."""
 
-
-class HealthResponse(BaseModel):
-    """Response returned by the /health endpoint."""
-    status: str
-    model_loaded: bool
-    model_type: str
-    feature_count: int
-
-
-class ExplainRequest(BaseModel):
-    """Request for Explainable AI (XAI) analysis."""
-    url: str = Field(default="", description="Full URL of the page")
-    hostname: Optional[str] = Field(default="", description="Hostname of the page")
-    is_phishing: Optional[bool] = Field(default=True, description="True if page was flagged as phishing")
-    risk_level: Optional[str] = Field(default="HIGH", description="Risk level (HIGH, MEDIUM, LOW)")
-    phishing_probability: Optional[float] = Field(default=0.95, description="Phishing confidence probability")
-    features: Optional[dict] = Field(default_factory=dict, description="Extracted feature key-values")
-    groq_api_key: Optional[str] = Field(default=None, description="Optional Groq API key")
-    gemini_api_key: Optional[str] = Field(default=None, description="Legacy optional API key field")
-
-
-class ExplainResponse(BaseModel):
-    """Response returned by the /explain endpoint."""
-    explanation: str = Field(description="Human-readable explanation from Groq AI or rule engine")
-    top_indicators: list[str] = Field(default_factory=list, description="List of technical red flags")
-    source: str = Field(description="'groq', 'rule_based', or 'rule_based_fallback'")
-    error: Optional[str] = Field(default=None, description="Optional error message if Groq call failed")
-
-
-class AnalyzeURLRequest(BaseModel):
-    """Request for direct backend URL scanning (without requiring browser extension DOM input)."""
-    url: str = Field(description="Target HTTP/HTTPS URL to fetch, inspect, and score")
-    use_ai_audit: bool = Field(default=True, description="Whether to invoke Groq AI merchant audit when red flags trigger")
-
-
-class AnalyzeURLResponse(BaseModel):
-    """Comprehensive backend analysis result for a directly scanned URL."""
-    url: str
-    hostname: str
-    is_unauthorized_or_phishing: bool
-    risk_probability: float
+    is_phishing: bool
+    phishing_probability: float
     legitimate_probability: float
     verdict: str
     risk_level: str
-    whitelisted: bool
+    whitelisted: bool = False
+    top_indicators: list[str] = Field(default_factory=list)
+    assessment: Optional[dict[str, Any]] = None
+
+
+class AnalyzeURLRequest(BaseModel):
+    url: str = Field(..., min_length=3, max_length=2048)
+    fetch_live: bool = Field(default=False, description="Optionally perform SSRF-safe backend HTML fetch")
+    deep_scan: bool = Field(default=True, description="Include threat intel, RDAP, and TLS checks")
+
+
+class AnalyzeDOMRequest(BaseModel):
+    url: str = Field(default="", max_length=2048)
+    html: Optional[str] = Field(default=None, max_length=1_500_000, description="Optional raw HTML to parse statically")
+    dom_features: Optional[DOMFeaturesPayload] = None
+
+
+class AnalyzeWebsiteRequest(BaseModel):
+    url: str = Field(..., min_length=3, max_length=2048)
+    html: Optional[str] = Field(default=None, max_length=1_500_000)
+    dom_features: Optional[DOMFeaturesPayload] = None
+    redirect_chain: list[str] = Field(default_factory=list)
+    fetch_live: bool = Field(default=False)
+    deep_scan: bool = Field(default=True)
+
+
+class WebsiteAssessmentResponse(BaseModel):
+    url: str
+    hostname: str
+    overall_risk_level: str
+    heuristic_risk_index: int
+    url_model_threat_probability: Optional[float] = None
+    dom_model_threat_probability: Optional[float] = None
+    verdict: str
+    whitelisted: bool = False
+    dimensions: dict[str, Any] = Field(default_factory=dict)
+    brand_impersonation: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[str] = Field(default_factory=list)
+    unavailable_signals: list[str] = Field(default_factory=list)
+    recommended_action: str = ""
+    assessment_confidence_note: str = ""
     tranco_rank: Optional[int] = None
     domain_age_days: Optional[int] = None
-    registry_match: dict = Field(default_factory=dict)
-    forensic_summary: dict = Field(default_factory=dict)
-    ai_audit: Optional[dict] = None
-    top_indicators: list[str] = Field(default_factory=list)
-    explanation: str = ""
+    registry_match: dict[str, Any] = Field(default_factory=dict)
 
+
+class ExplainRequest(BaseModel):
+    url: str = Field(default="", max_length=2048)
+    hostname: Optional[str] = Field(default="", max_length=512)
+    is_phishing: Optional[bool] = Field(default=True)
+    risk_level: Optional[str] = Field(default="HIGH")
+    phishing_probability: Optional[float] = Field(default=0.85, ge=0.0, le=1.0)
+    features: Optional[dict[str, Any]] = Field(default_factory=dict)
+    assessment: Optional[dict[str, Any]] = Field(default=None)
+    groq_api_key: Optional[str] = Field(default=None)
+
+
+class ExplainResponse(BaseModel):
+    explanation: str
+    top_indicators: list[str] = Field(default_factory=list)
+    feature_attributions: list[dict[str, Any]] = Field(default_factory=list)
+    source: str
+    error: Optional[str] = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    model_loaded: bool
+    url_model_loaded: bool
+    dom_model_loaded: bool
+    model_type: str
+    feature_count: int
+    threat_intel_loaded: bool
+
+
+class VersionResponse(BaseModel):
+    api_version: str
+    url_model_version: str
+    dom_model_version: str
+    schema_version: str
+
+
+class ModelInfoResponse(BaseModel):
+    active_manifest: dict[str, Any] = Field(default_factory=dict)
+    url_feature_count: int
+    dom_feature_count: int
+    threat_intel_status: dict[str, Any] = Field(default_factory=dict)
+
+
+class FeedbackRequest(BaseModel):
+    url: str = Field(..., min_length=3, max_length=2048)
+    report_type: str = Field(..., pattern="^(false_positive|missed_suspicious|incorrect_risk|incorrect_phishing)$")
+    reported_risk_level: Optional[str] = Field(default=None, max_length=32)
+    expected_category: Optional[str] = Field(default=None, max_length=64)
+    notes: Optional[str] = Field(default="", max_length=1000)
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    report_id: str
+    verification_status: str
+    message: str

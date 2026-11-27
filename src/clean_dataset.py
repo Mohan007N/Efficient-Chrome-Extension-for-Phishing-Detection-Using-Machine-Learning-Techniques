@@ -127,9 +127,8 @@ def generate_modern_valid_samples(base_legit: pd.DataFrame, n_samples: int = 350
     sampled.loc[idx2, "HasDescription"] = rng.choice([0, 1], size=n2, p=[0.45, 0.55])
     sampled.loc[idx2, "DomainTitleMatchScore"] = rng.choice([0.0, 25.0, 50.0, 100.0], size=n2, p=[0.25, 0.25, 0.25, 0.25])
 
-    info_mask = (sampled.index < n1 + n2) & (sampled["HasPasswordField"] == 0) & (sampled["Bank"] == 0) & (sampled["Pay"] == 0) & (sampled["Crypto"] == 0)
-    http_mask = info_mask & (rng.random(size=n_samples) < 0.25)
-    sampled.loc[http_mask, "IsHTTPS"] = 0
+    # All legitimate training samples must use HTTPS; public non-HTTPS HTTP sites are treated as unsafe/fake
+    sampled["IsHTTPS"] = 1
 
     idx3 = sampled.index[n1 + n2:]
     url_lens_3 = rng.integers(28, 90, size=n3)
@@ -428,6 +427,12 @@ def main():
         if col in df.columns:
             df[col] = df[col].clip(lower=lo, upper=hi)
 
+    # Remove any non-HTTPS rows from legitimate class so all public HTTP websites are classified as fake/unsafe
+    if "IsHTTPS" in df.columns and "label" in df.columns:
+        before_http = len(df)
+        df = df[~((df["label"] == 1) & (df["IsHTTPS"] == 0))].copy()
+        print(f"Removed {before_http - len(df)} non-HTTPS legitimate rows (enforcing HTTP -> unsafe).")
+
     # 3. Cap dead/empty 404 phishing stubs so lightweight valid pages aren't flagged
     is_dead_stub = (
         (df["label"] == 0)
@@ -450,6 +455,8 @@ def main():
         # Re-align columns and upweight real live observations modestly so they shape splits
         live_df = live_df[[c for c in cols if c in live_df.columns]]
         if not live_df.empty:
+            if "IsHTTPS" in live_df.columns and "label" in live_df.columns:
+                live_df = live_df[~((live_df["label"] == 1) & (live_df["IsHTTPS"] == 0))].copy()
             if "URL" in df_clean.columns and "URL" in live_df.columns:
                 df_clean = df_clean[~df_clean["URL"].isin(live_df["URL"])].copy()
             live_df = pd.concat([live_df] * 6, ignore_index=True)

@@ -1,195 +1,250 @@
-# AI-Powered Fake Login Page Detection using Machine Learning.
+# AI-Powered Website Safety, Phishing Detection & Trust Assessment System
 
-A complete, professional machine learning project for **B.Tech 3rd-Year AI & Data Science**. This project focuses on detecting phishing URLs and fake login pages by training classification models (Decision Tree, Random Forest, and XGBoost) on the **PhiUSIIL Phishing URL Dataset**. The trained best model is serialized for later integration into a Chrome Browser Extension via a web API backend (Flask/FastAPI).
+> **Multi-Layer Website Risk Intelligence Platform (WebShield AI v2.0)** — Combining separated URL & DOM Machine Learning, Brand Impersonation Analysis, Credential & Payment Forensics, Threat Intelligence, SHAP Explainable AI, and a Privacy-First Chrome Extension (Manifest V3).
 
 ---
 
-## 📁 Project Structure
+## 1. Overview & Motivation
+
+Conventional phishing detectors collapse website safety into a simplistic binary label (`Legitimate` vs. `Phishing`) based heavily on raw URL text. That misses real-world web threats where a site may run over valid HTTPS yet run deceptive checkout scams, harvest credentials via cross-domain forms, abuse download lures, inject hidden iframes, or impersonate established shopping and banking portals.
+
+Conversely, naive detectors often misclassify harmless unencrypted documentation (`http://`) as "phishing" or falsely equate advertising scripts or unreachable DNS/RDAP lookups with malware.
+
+**WebShield AI** answers the practical user question:
+
+> *"Is this website safe to browse, log in, download files from, or make payments on?"*
+
+---
+
+## 2. Threat Scope & Multi-Dimensional Assessment
+
+Rather than forcing every website into one binary bucket, WebShield AI assesses **six separated risk dimensions** alongside transparent signal availability:
+
+| Dimension | Signals Inspected | Key Safeguard |
+| --- | --- | --- |
+| **Connection Security** | HTTPS vs. HTTP transport and mixed-content count | HTTP alone indicates unencrypted transport (`MEDIUM`), never standalone proof of phishing. |
+| **Phishing Risk** | Separated URL ML probability, DOM behaviour ML probability, brand impersonation, and active phishing feeds | Absence from a blocklist never implies safety (`UNKNOWN` when evidence is absent). |
+| **Malware Risk** | Malware feeds (URLhaus / HaGeZi TIF), fake download/update buttons, and obfuscated/dynamic script injection | Standard third-party ads or scripts alone are never marked malware. |
+| **Credential Risk** | Password/login forms, unencrypted login submission, external cross-domain form actions, and brand-domain mismatches | Legitimate first-party HTTPS login forms are not flagged solely for having password inputs. |
+| **Payment Risk** | External payment processors, prepaid-only checkout with restrictive refund/store-credit clauses, absent corporate identity, and verified fraud registries | Designed to surface deceptive e-commerce/prepaid trap storefronts alongside credential threats. |
+| **Deceptive Behaviour Risk** | Hidden/zero-size iframes, meta/JS redirects, `window.open` popups, notification permission prompts, and urgency CTAs | Discloses `cross_origin_iframes_uninspected` and unavailable browser signals honestly. |
+
+Overall Risk Levels: **`LOW`** | **`MEDIUM`** | **`HIGH`** | **`CRITICAL`** | **`UNKNOWN`**.  
+ML probabilities (`url_model_threat_probability`, `dom_model_threat_probability`) are reported separately from the multi-factor **`heuristic_risk_index` (`0–100`)**.
+
+---
+
+## 3. System Architecture
 
 ```text
-"AI in Cyber security project"/
-│
-├── dataset/                               # Folder where dataset is placed (auto-managed)
-│   └── PhiUSIIL_Phishing_URL_Dataset.csv
-│
-├── models/                                # Serialized model and preprocessors (auto-generated)
-│   ├── best_phishing_model.pkl            # Trained Random Forest / best classifier
-│   ├── label_encoder.pkl                  # Fitted LabelEncoder for categorical variables
-│   └── feature_columns.pkl                # Ordered list of training features
-│
-├── notebooks/
-│   └── Fake_Login_Detection_EDA.ipynb     # Jupyter Notebook for interactive EDA & training
-│
-├── reports/                               # Visualizations and performance tables (auto-generated)
-│   ├── model_comparison_results.csv       # Metrics comparison table (CSV)
-│   ├── correlation_heatmap.png            # Features correlation heatmap
-│   ├── decision_tree_confusion_matrix.png
-│   ├── random_forest_confusion_matrix.png
-│   └── random_forest_roc_curve.png
-│
-├── logs/                                  # Log files capturing training outputs (auto-generated)
-│   └── project.log
-│
-├── src/                                   # Project source code modules
-│   ├── __init__.py                        # Packages marker
-│   ├── utils.py                           # Directory helper, dual-logger, and joblib serializers
-│   ├── preprocessing.py                   # Data loading, duplicate removal, null handling, encoding
-│   ├── evaluate.py                        # Metrics calculator and plots generator (Heatmap, ROC, Importance)
-│   ├── train.py                           # Orchestrator training pipeline comparing ML algorithms
-│   └── predict.py                         # Single URL/mock features inference helper script
-│
-├── requirements.txt                       # Package dependencies
-└── README.md                              # Project documentation
+[Chrome Extension MV3 (chrome_extension/)]
+ ├── content.js         -> Structural DOM/URL extraction (0 credential values, 700ms SPA debounce)
+ ├── background.js      -> Configurable API URL, 5-min TTL cache, throttle, local scan history (<=100)
+ └── popup.html/css/js  -> Dark/Light themes, 6-dimension cards, XAI trigger, Trust Site, Feedback
+          │
+          ▼ HTTPS / JSON (never embeds API keys in extension)
+[FastAPI Backend (backend/main.py)]
+ ├── security.py        -> SSRF DNS/IP/redirect guard, 2 MB ceiling, rate limiter, privacy sanitizer
+ ├── predictor.py       -> Loads promoted model registry bundles + orchestrates 5 assessment layers
+ │    ├── Model 1: URL Risk Classifier        (src/features.py + models/url_model.pkl)
+ │    ├── Model 2: DOM Behaviour Classifier   (src/dom_features.py + models/dom_model.pkl)
+ │    ├── Model 3: Brand Impersonation        (edit distance, homoglyphs, Punycode, title mismatch)
+ │    ├── Model 4: Credential & Payment Risk  (form action targets + storefront forensics)
+ │    └── Model 5: Threat Intelligence Engine (backend/intel.py + unauthorized_domains.json.gz)
+ ├── risk_engine.py     -> Multi-dimension fusion -> LOW / MEDIUM / HIGH / CRITICAL / UNKNOWN
+ └── explainer.py       -> SHAP TreeExplainer attributions + rule evidence + optional Groq synthesis
+```
+
+Detailed architectural notes: [`docs/architecture.md`](docs/architecture.md)
+
+---
+
+## 4. Repository Layout
+
+```text
+├── backend/
+│   ├── main.py              # FastAPI REST endpoints, middleware, SSRF guards, lifespan loading
+│   ├── predictor.py         # Multi-model orchestrator & backward-compatible /predict bridge
+│   ├── risk_engine.py       # 6-dimension HybridRiskEngine (rule + ML fusion)
+│   ├── explainer.py         # SHAP TreeExplainer + deterministic rules + optional Groq XAI
+│   ├── intel.py             # Threat intelligence engine + Tranco ranking + safe forensics
+│   ├── schemas.py           # Pydantic v2 request/response contracts
+│   └── security.py          # SSRF IP/DNS/redirect validation, rate limiter, privacy sanitizer
+├── chrome_extension/
+│   ├── manifest.json        # Manifest V3 (minimal permissions, v2.0.0)
+│   ├── content.js           # Safe DOM telemetry + non-blocking safety notice banner
+│   ├── background.js        # Configurable API endpoint, cache, deduplication, trust/history store
+│   ├── popup.html           # Redesigned Light/Dark multi-dimension security popup
+│   ├── popup.css            # Dual-theme design system
+│   ├── popup.js             # Controller: live status, XAI modal, Trust Site, feedback reporting
+│   └── icons/               # Extension icons (16, 32, 48, 128 px)
+├── src/
+│   ├── build_datasets.py    # Multi-source dataset pipeline (PhiUSIIL, PhreshPhish, OpenPhish, Tranco)
+│   ├── dataset_validation.py# Multi-label schema enforcement & domain-grouped GroupShuffleSplit
+│   ├── features.py          # Model 1 (27 URL features, www.-canonicalized) + Model 3 (Brand detector)
+│   ├── dom_features.py      # Model 2 (36 DOM features) + Model 4 (Credential & payment detector)
+│   ├── web_forensics.py     # Safe static storefront forensics, DNS/TLS/RDAP helpers
+│   ├── model_registry.py    # Versioned artifact registry & promotion gate verification
+│   ├── train.py             # Model 1 training, domain-grouped CV, MLflow SQLite logging
+│   ├── train_dom.py         # Model 2 training, domain-grouped + temporal evaluation, MLflow logging
+│   ├── evaluate.py          # Metrics (Accuracy, F1, ROC-AUC, PR-AUC, FPR, FNR) & plots
+│   ├── predict.py           # CLI verification script using PhishingPredictor
+│   └── utils.py             # Logging & serialization helpers
+├── tests/                   # Automated pytest suites (synthetic fixtures only)
+├── docs/                    # Architecture, Dataset, Model, API, Extension, Deployment & Privacy docs
+├── reports/                 # Initial audit, upgrade plan, feature inventory & comparison CSVs/plots
+├── Dockerfile               # FastAPI container definition with /health check
+├── docker-compose.yml       # API service + optional MLflow UI profile
+├── render.yaml              # Render web service configuration
+├── .github/workflows/ci.yml # Automated pytest, extension JSON/JS check & Docker build CI
+└── requirements.txt         # Pinned runtime & MLflow/SHAP dependencies
 ```
 
 ---
 
-## 🚀 Getting Started & Installation
+## 5. Multi-Source Dataset Engineering
 
-### Prerequisite
-* Python 3.12+ installed on your computer.
+[`src/build_datasets.py`](src/build_datasets.py) integrates real and verified security sources without synthetic domain-label contamination:
 
-### Step 1: Clone or Open the Project
-Ensure the project structure matches the one shown above, with `PhiUSIIL_Phishing_URL_Dataset.csv` located at the root of the project workspace. 
+- **PhiUSIIL** (`59,919` verified URLs after stripping prior `SYNTHETIC_PREFIXES` and capping at 2 rows per `root_domain`).
+- **PhreshPhish** (`phreshphish/phreshphish`, Hugging Face CC-BY-4.0: `806` unique domain-capped HTML+URL records from `997` cached samples; parsed statically with BeautifulSoup — scripts are never executed).
+- **OpenPhish** (`300` active phishing URLs).
+- **Tranco Top-1M** (`72` vetted `TRUSTED_DOMAINS`; **417** unvetted top-ranked candidates isolated strictly into `data/processed/uncertain_samples.csv` with `binary_label = -1` so popularity alone never asserts safety).
+- **Verified Multi-Label Fixtures** (`data/external/custom_verified.csv`: `8` verified consumer-fraud registry and offline HTML fixtures).
+- **URLhaus & PhishTank** (optional API-key adapters; skip gracefully when unconfigured or rate-limited).
 
-### Step 2: Set up a Virtual Environment (Recommended)
-Open your terminal (PowerShell or Command Prompt) in the project directory:
-```bash
-# Create a virtual environment named 'venv'
-python -m venv venv
+**Partitioning & Leakage Prevention (`src/dataset_validation.py`)**:
+- `url_dataset.csv` (`61,105` rows across `58,401` unique root domains) -> domain-disjoint `url_train.csv` (`42,668`), `url_val.csv` (`6,129`), `url_test.csv` (`12,308`).
+- `dom_dataset.csv` (`813` rows across `710` unique root domains) -> domain-disjoint `dom_train.csv` (`572`), `dom_val.csv` (`82`), `dom_test.csv` (`159`), plus chronological `dom_temporal_test.csv` (`202` rows).
+- Large raw datasets (`dataset/*.csv`, `data/raw/`, `data/processed/`, `data/feedback/`) and `.env` secrets are excluded from Git tracking via `.gitignore`.
 
-# Activate the virtual environment
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-# On Windows (CMD):
-.\venv\Scripts\activate.bat
-```
+Full dataset documentation: [`docs/dataset_documentation.md`](docs/dataset_documentation.md)
 
-### Step 3: Install Required Packages
-Install all libraries (Pandas, Numpy, Scikit-Learn, Matplotlib, Seaborn, Joblib, and XGBoost) specified in the requirements file:
-```bash
+---
+
+## 6. Model Benchmarks & Active Registry
+
+During evaluation, SHAP inspection revealed that `99.98%` of PhiUSIIL legitimate URLs began with `www.` compared with `60.4%` of benign PhreshPhish sites, causing naive URL models to assign spurious high risk (`~0.88`) to legitimate non-`www.` URLs. Leading `www.` prefixes are now canonicalized prior to lexical extraction in `src/features.py` so classifiers evaluate genuine structural risk.
+
+### Model 1: URL Risk Classifier (`data/processed/url_test.csv` — `12,308` unseen domain-disjoint URLs)
+
+| Model | CV F1 (Grouped) | Val F1 | Accuracy | Precision | Recall | F1 Score | ROC AUC | PR AUC | FPR | FNR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **HistGradientBoosting** *(Promoted `v2.0.0`)* | **0.9694** | 0.9696 | **0.9686** | 0.9538 | 0.9851 | **0.9692** | 0.9884 | **0.9917** | 0.0149 | 0.0478 |
+| **XGBoost** | 0.9693 | **0.9698** | 0.9685 | 0.9541 | 0.9844 | 0.9690 | **0.9886** | 0.9916 | 0.0156 | 0.0475 |
+| **Random Forest** | 0.9664 | 0.9697 | 0.9682 | **0.9543** | 0.9836 | 0.9687 | 0.9870 | 0.9908 | 0.0164 | **0.0472** |
+| **Decision Tree** | 0.9621 | 0.9672 | 0.9638 | 0.9492 | 0.9800 | 0.9644 | 0.9808 | 0.9821 | 0.0200 | 0.0525 |
+| **Logistic Regression** | 0.9489 | 0.9496 | 0.9482 | 0.9173 | **0.9854** | 0.9502 | 0.9781 | 0.9846 | **0.0146** | 0.0890 |
+
+### Model 2: DOM Behaviour Classifier (`data/processed/dom_test.csv` — `159` unseen domain-disjoint pages + `202` temporal pages)
+
+| Model | CV F1 (Grouped) | Val F1 | Temporal F1 | Accuracy | Precision | Recall | F1 Score | ROC AUC | PR AUC | FPR | FNR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **DOM Random Forest** *(Promoted `v2.0.0`)* | **0.8665** | **0.9455** | 0.9536 | **0.8365** | 0.8545 | **0.9038** | **0.8785** | **0.9030** | 0.8490 | **0.0962** | 0.2909 |
+| **DOM HistGradientBoosting** | 0.8649 | **0.9455** | **0.9671** | 0.8302 | 0.8598 | 0.8846 | 0.8720 | 0.8939 | 0.8398 | 0.1154 | 0.2727 |
+| **DOM XGBoost** | 0.8638 | **0.9455** | 0.9404 | 0.8302 | 0.8667 | 0.8750 | 0.8708 | 0.8976 | **0.8492** | 0.1250 | 0.2545 |
+| **DOM GradientBoosting** | 0.8643 | 0.9259 | 0.9502 | 0.8239 | **0.8725** | 0.8558 | 0.8641 | 0.8993 | 0.8369 | 0.1442 | **0.2364** |
+
+Both active bundles pass `src/model_registry.py` promotion gates (`F1 >= 0.82`, `ROC AUC >= 0.88`, `FPR <= 0.12`) and are recorded in [`models/registry/active_manifest.json`](models/registry/active_manifest.json).
+
+Full model & XAI details: [`docs/model_documentation.md`](docs/model_documentation.md)
+
+---
+
+## 7. FastAPI Backend Endpoints
+
+| Method & Path | Purpose |
+| --- | --- |
+| `GET /health` | Readiness status, URL/DOM model load state, feature counts, threat feed state |
+| `GET /version` | API, URL model, DOM model, and schema versions |
+| `GET /model-info` | Active model registry manifest & feed counts |
+| `POST /predict` | Chrome Extension assessment endpoint (legacy compatible + full `assessment` breakdown) |
+| `POST /analyze-url` | URL ML + Brand Impersonation + Threat Intel + optional SSRF-safe live fetch |
+| `POST /analyze-dom` | Static HTML or structured `DOMFeaturesPayload` assessment |
+| `POST /analyze-website` | Full combined URL + DOM + Redirect + Payment/Credential + Threat Intel evaluation |
+| `POST` / `GET /scan` | Convenience SSRF-protected live scan endpoint |
+| `POST /explain` | SHAP `TreeExplainer` attributions + rule breakdown + optional Groq LLM synthesis |
+| `POST` / `GET /feedback` | Human-review feedback queue (`pending_human_review`; never auto-promoted) & aggregate counts |
+| `GET /analytics` | Anonymized aggregate scan counts and risk distributions |
+| `GET /unauthorized-sites` | Query built-in verified fraud/scam catalog |
+
+Full API reference: [`docs/api_documentation.md`](docs/api_documentation.md)
+
+---
+
+## 8. Chrome Extension Setup (Manifest V3)
+
+1. Open Chrome and navigate to `chrome://extensions/`.
+2. Toggle **Developer mode** ON.
+3. Click **Load unpacked** and select [`chrome_extension/`](chrome_extension/).
+4. Open the **WebShield AI** toolbar popup, click **`⚙`**, configure your local (`http://127.0.0.1:8000`) or HTTPS production backend URL, and click **Save**.
+5. Browse any website to view its 6 risk dimension badges, Heuristic Risk Index, unavailable-signal disclosures, on-demand XAI explanations, `Trust Site` override, feedback reporting, and Dark/Light theme switcher.
+
+Extension architecture & privacy guarantees: [`docs/extension_documentation.md`](docs/extension_documentation.md) & [`docs/privacy_and_security.md`](docs/privacy_and_security.md)
+
+---
+
+## 9. Quick Start (Local, Docker & Render)
+
+### Local Development
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
+copy .env.example .env
 
----
-
-## 🏃 Running the Project
-
-### 1. Training the Machine Learning Models (Main Pipeline)
-Run the orchestrator script to automatically clean the dataset, train models, compare performance, and save the best-performing model:
-```bash
+# Optional: rebuild processed datasets & retrain models
+python src/build_datasets.py --max-phiusiil 60000 --max-phreshphish 1200
 python src/train.py
-```
-* **What happens behind the scenes:**
-  * It detects `PhiUSIIL_Phishing_URL_Dataset.csv` at the root and moves it to `dataset/`.
-  * It inspects the dataset for null values, removes duplicate records, and separates features.
-  * It encodes the `TLD` column automatically using a `LabelEncoder` and saves it.
-  * It generates a correlation matrix plot of the features in the `reports/` folder.
-  * It splits the dataset into **80% training** and **20% testing** using stratified splits.
-  * It trains a **Decision Tree**, **Random Forest**, and **XGBoost** (if installed).
-  * It evaluates them on accuracy, precision, recall, f1-score, and ROC AUC, generating heatmaps/curves.
-  * It compiles a comparison table, selects the best model (typically Random Forest), and saves it as `models/best_phishing_model.pkl`.
+python src/train_dom.py
 
-### 2. Interactive Analysis (Jupyter Notebook)
-To perform step-by-step visualizations and exploratory analysis interactively:
-```bash
-jupyter notebook notebooks/Fake_Login_Detection_EDA.ipynb
+# Start backend API (Swagger docs at http://127.0.0.1:8000/docs)
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
-*(Make sure to run `pip install jupyter` in your virtual environment first if not installed)*
 
-### 3. Testing Single Inference
-To test loading the trained model files and predicting a sample URL's status:
+### Docker & MLflow Tracking UI
 ```bash
-python src/predict.py
+docker compose up --build api
+# Optional MLflow experiment UI (http://127.0.0.1:5000):
+docker compose --profile mlops up --build
 ```
+
+Deployment & environment reference: [`docs/deployment.md`](docs/deployment.md)
 
 ---
 
-## 📊 Modules Explanation
+## 10. Automated Testing
 
-### 1. Preprocessing (`src/preprocessing.py`)
-* **Auto Target Detection:** Auto-detects the target column as `'label'` (or falls back to the last column).
-* **Feature Pruning:** Drops `URL`, `Domain`, and `Title` since they are unique metadata and would cause target leakage or overfit.
-* **Categorical Encoding:** Automatically finds non-numerical features (like `TLD` - top level domain) and encodes them using `LabelEncoder`.
-* **Missing Value Imputation:** Fills numerical null values with column medians and categorical ones with modes to prevent training exceptions.
+All automated tests use synthetic HTML/URL fixtures (never visiting active malicious websites or mutating personal browsing state):
 
-### 2. Evaluation (`src/evaluate.py`)
-* Computes metrics: Accuracy, Precision, Recall, F1 Score, and Area Under the ROC Curve (ROC AUC).
-* Generates **Confusion Matrix Heatmap**, **ROC Curve**, and **Feature Importance Bar Charts** using Matplotlib and Seaborn, and saves them to `reports/`.
+```powershell
+# Unit, DOM, risk fusion, and Chrome extension security tests
+pytest -v tests/test_url_features.py tests/test_dom_features.py tests/test_risk_engine.py tests/test_extension_assets.py
 
-### 3. Utilities (`src/utils.py`)
-* Handles directory setup and dataset placement automatically.
-* Implements standard logging writing to both console and `logs/project.log`.
-* Encapsulates `joblib` loading and saving routines.
+# FastAPI endpoint & SSRF test suite
+pytest -v tests/test_backend_api.py
+```
+
+Latest verified test results: **20 / 20 tests passing** (`16` unit/extension tests + `4` backend API/SSRF tests) and `python src/predict.py` smoke check passing.
 
 ---
 
-## 🔮 Future Integration Roadmap
+## 11. Known Limitations
 
-This model is intended to protect users from entering passwords on fake login pages. The roadmap consists of three main components:
+- **Cross-Origin `<iframe>` Isolation**: Chrome content scripts and static HTML parsers cannot inspect documents inside cross-origin iframes (`cross_origin_iframes_uninspected` and `unavailable_signals` disclose this explicitly).
+- **Runtime JS Obfuscation**: Static HTML analysis evaluates inline script entropy and DOM patterns without executing unknown JavaScript in a sandboxed browser engine.
+- **RDAP / DNS & Feed Credentials**: Unreachable RDAP endpoints never imply malice (`unavailable_signals` notes missing `rdap_domain_age`). `URLHAUS_AUTH_KEY` and `PHISHTANK_API_KEY` are optional; unconfigured feeds degrade gracefully.
+- **Historical Raw CSVs in Existing Git History**: `.gitignore` excludes `dataset/*.csv` going forward; previously committed large files remain in earlier Git history unless cleaned explicitly by the repository owner.
 
-### 1. Chrome Extension Frontend
-* **Popup (`popup.html` / `popup.js`):** A small UI that displays the security status (Safe vs. Suspicious) and probability score of the active tab.
-* **Content Script (`content.js`):** Inspects page source code. It reads DOM elements (checks if there is a password input field or a login button) and counts tags, iframes, and external links to formulate the features list.
-* **Background Script (`background.js`):** Intercepts tab changes or page load requests. It extracts the current URL (e.g., parses the top-level domain and length) and sends these raw page features as a JSON payload to our backend Web API.
+---
 
-### 2. FastAPI/Flask Backend
-Since Chrome extensions cannot load heavy Python models directly in the browser, a Python API serves as the bridge:
-* You host a FastAPI server containing a `/predict` POST endpoint.
-* The API loads `best_phishing_model.pkl`, `label_encoder.pkl`, and `feature_columns.pkl` into memory upon startup.
-* When the Chrome extension sends extracted page metrics, the API aligns, encodes, runs inference, and returns a JSON response:
-  ```json
-  {
-    "url": "https://secure-bank-login.xyz",
-    "is_phishing": true,
-    "confidence": 0.985
-  }
-  ```
+## 12. Documentation & Audit Reports
 
-#### Example FastAPI Endpoint Draft:
-```python
-from fastapi import FastAPI
-from pydantic import BaseModel
-import pandas as pd
-import joblib
-
-app = FastAPI()
-
-# Load our saved artifacts
-model = joblib.load("models/best_phishing_model.pkl")
-encoders = joblib.load("models/label_encoder.pkl")
-feature_names = joblib.load("models/feature_columns.pkl")
-
-class URLFeatures(BaseModel):
-    URLLength: int
-    DomainLength: int
-    IsDomainIP: int
-    TLD: str
-    IsHTTPS: int
-    NoOfiFrame: int
-    HasPasswordField: int
-    # ... Include other features expected by the model
-
-@app.post("/predict")
-def predict_url(features: URLFeatures):
-    data = pd.DataFrame([features.dict()])
-    
-    # Align columns and apply LabelEncoder to TLD
-    data = data[feature_names]
-    tld_encoder = encoders["TLD"]
-    if data["TLD"].iloc[0] in tld_encoder.classes_:
-        data["TLD"] = tld_encoder.transform(data["TLD"])
-    else:
-        data["TLD"] = 0 # Default fallback class
-        
-    pred = model.predict(data)[0]
-    prob = model.predict_proba(data)[0][pred]
-    
-    return {
-        "phishing": bool(pred == 0),
-        "confidence": float(prob)
-    }
-```
-
-### 3. Real-Time Phishing Detection
-* **Heuristics & ML Hybrid:** To prevent overloading the server, the Chrome extension checks a local whitelist/blacklist database first (e.g. Google Safe Browsing API or popular sites list). If the domain is unknown and contains login forms, the background script extracts features and queries the ML model backend to render real-time protection shields to the user.
+- **Architecture**: [`docs/architecture.md`](docs/architecture.md)
+- **Datasets & Splits**: [`docs/dataset_documentation.md`](docs/dataset_documentation.md)
+- **Models, Metrics & MLOps**: [`docs/model_documentation.md`](docs/model_documentation.md)
+- **API Reference**: [`docs/api_documentation.md`](docs/api_documentation.md)
+- **Chrome Extension Guide**: [`docs/extension_documentation.md`](docs/extension_documentation.md)
+- **Deployment Guide**: [`docs/deployment.md`](docs/deployment.md)
+- **Privacy & Security**: [`docs/privacy_and_security.md`](docs/privacy_and_security.md)
+- **Audit & Planning Reports**: [`reports/initial_audit.md`](reports/initial_audit.md) | [`reports/upgrade_plan.md`](reports/upgrade_plan.md) | [`reports/feature_inventory.md`](reports/feature_inventory.md)

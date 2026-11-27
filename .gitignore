@@ -7,17 +7,31 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Logs
+# Logs & MLOps local tracking
 logs/
 *.log
+mlruns/
+mlartifacts/
 
-# Models & Large Checkpoints (optional, but keep trained files if light; ignore cache)
+# Large Datasets & External Threat Feed Caches (do not commit large datasets or downloaded content)
+data/raw/
+data/processed/
+data/feedback/
+dataset/*.csv
+dataset/*.json.gz
+*.csv.gz
+*.parquet
+
+# Test / Build Caches
 .pytest_cache/
 .ipynb_checkpoints/
+htmlcov/
+.coverage
 
-# OS / IDE
+# OS / IDE / Secrets
 .DS_Store
 .vscode/
 .idea/
 .env
 *.env
+!.env.example

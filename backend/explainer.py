@@ -1,29 +1,95 @@
 """
-backend/explainer.py — Explainable AI (XAI) Engine for Phishing Detection
+backend/explainer.py — Multi-Layer Explainable AI (XAI) & SHAP Attribution Engine
 
-Provides human-interpretable explanations of why a webpage was flagged as phishing:
-1. Feature-attribution rule engine: Extracts top technical red flags from 48 ML features.
-2. Groq AI integration: Uses ultra-fast Groq inference to produce concise,
-   natural-language incident-response briefings for the end user.
+Combines:
+1. SHAP (TreeExplainer) / feature-importance attributions from URL & DOM models
+2. Dimension-specific rule explanations (Credential, Payment, Malware, Deceptive, Transport, Brand)
+3. Threat intelligence evidence
+4. Optional Groq LLM synthesis (falls back cleanly to structured deterministic explanations)
+
+Rule compliance: Never presents statistical correlation as definitive proof of malicious intent.
 """
 
-import os
+from __future__ import annotations
+
 import json
 import logging
-import urllib.request
-import urllib.error
+import os
 import sys
+import urllib.error
+import urllib.request
+
 from dotenv import load_dotenv
-
-load_dotenv(override=True)
-
-logger = logging.getLogger("PhishingAPI.Explainer")
 
 from src.features import SUSPICIOUS_COMMERCE_TLDS, detect_brand_impersonation
 
-DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+load_dotenv(override=True)
+logger = logging.getLogger("PhishingAPI.Explainer")
 
+DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 SUSPICIOUS_TLDS = SUSPICIOUS_COMMERCE_TLDS
+
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+
+
+def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
+    """
+    Compute top SHAP feature contributions toward threat risk (class 0) for a single-row DataFrame.
+    Gracefully falls back to model feature_importances_ or empty list on unsupported estimators.
+    """
+    if model is None or X_row is None or getattr(X_row, "empty", True):
+        return []
+
+    cols = list(X_row.columns)
+    if SHAP_AVAILABLE:
+        try:
+            explainer = shap.TreeExplainer(model)
+            sv = explainer.shap_values(X_row)
+            # Handle binary / multi-output SHAP shapes safely
+            if isinstance(sv, list):
+                vals = sv[0][0]
+            elif getattr(sv, "ndim", 0) == 3:
+                vals = sv[0, :, 0]
+            elif getattr(sv, "ndim", 0) == 2:
+                # Some tree explainers output log-odds for class 1 (benign) -> invert sign for risk contribution
+                vals = -sv[0]
+            else:
+                vals = sv
+            pairs = []
+            for idx, col in enumerate(cols):
+                contrib = float(vals[idx])
+                pairs.append({
+                    "feature": col,
+                    "value": float(X_row.iloc[0, idx]),
+                    "risk_contribution": round(contrib, 4),
+                    "direction": "increases_risk" if contrib > 0 else "reduces_risk",
+                })
+            pairs.sort(key=lambda x: abs(x["risk_contribution"]), reverse=True)
+            return pairs[:top_k]
+        except Exception as e:
+            logger.debug(f"SHAP TreeExplainer skipped: {e}")
+
+    if hasattr(model, "feature_importances_"):
+        importances = model.feature_importances_
+        ranked = sorted(
+            zip(cols, importances, X_row.iloc[0].tolist()),
+            key=lambda t: float(t[1]),
+            reverse=True,
+        )[:top_k]
+        return [
+            {
+                "feature": col,
+                "value": float(val),
+                "risk_contribution": round(float(imp), 4),
+                "direction": "model_importance",
+            }
+            for col, imp, val in ranked
+        ]
+    return []
 
 
 def extract_top_indicators(
@@ -32,238 +98,116 @@ def extract_top_indicators(
     risk_level: str,
     backend_indicators: list[str] | None = None,
 ) -> list[str]:
-    """
-    Examines page, URL, and backend intelligence signals to identify primary red flags
-    (fake storefronts, upfront-payment traps, brand clones, credential harvesting)
-    or verified safety factors.
-    """
+    """Extract readable technical indicators from features and optional assessment evidence."""
     indicators: list[str] = []
     if backend_indicators:
-        for b_ind in backend_indicators:
-            if b_ind and b_ind not in indicators:
-                indicators.append(b_ind)
+        for item in backend_indicators:
+            if item and item not in indicators:
+                indicators.append(item)
 
-    if is_phishing:
+    if not indicators and features_dict:
         hostname = str(features_dict.get("hostname", features_dict.get("Domain", "")))
         imp_score, matched_brand = detect_brand_impersonation(hostname)
         if imp_score >= 0.80 and matched_brand:
-            msg = f"Brand Impersonation: Unauthorized domain mimics '{matched_brand}'."
-            if not any("Brand Impersonation" in x for x in indicators):
-                indicators.append(msg)
+            indicators.append(f"Hostname resembles protected brand '{matched_brand}' on an unofficial domain.")
 
-        # 1. Password field checks
-        has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
-        if has_pwd:
-            indicators.append("Credential Field: Page contains password input fields prompting for sensitive credentials.")
+        is_https = int(features_dict.get("IsHTTPS", features_dict.get("is_https", 1)) or 0) == 1
+        has_pwd = int(features_dict.get("HasPasswordField", features_dict.get("num_password_fields", 0)) or 0) > 0
+        ext_sub = int(features_dict.get("HasExternalFormSubmit", features_dict.get("has_external_form_action", 0)) or 0) > 0
 
-        # 2. HTTPS status
-        is_https = int(features_dict.get("IsHTTPS", 0)) == 1
         if not is_https:
-            indicators.append("Insecure Protocol: Connection lacks HTTPS encryption, exposing entered credentials to interception.")
-
-        # 3. External Form Submission
-        ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
-        if ext_submit:
-            indicators.append("External Data Exfiltration: Forms on this page submit data to an external, third-party domain.")
-
-        # 4. TLD Analysis
-        tld = str(features_dict.get("TLD", "")).lower().lstrip(".")
-        if tld in SUSPICIOUS_TLDS:
-            indicators.append(f"Suspicious Top-Level Domain: '.{tld}' is frequently associated with disposable phishing campaigns.")
-
-        # 5. IP Address Domain
-        is_ip = int(features_dict.get("IsDomainIP", 0)) == 1
-        if is_ip:
-            indicators.append("IP-Based Host: URL uses a direct IP address instead of a registered domain name.")
-
-        # 6. Obfuscated characters
-        obf_count = int(features_dict.get("NoOfObfuscatedChar", 0))
-        has_obf = int(features_dict.get("HasObfuscation", 0)) == 1
-        if has_obf or obf_count > 0:
-            indicators.append(f"URL Obfuscation: Detected {obf_count} encoded or obfuscated characters intended to disguise destination.")
-
-        # 7. Domain / Title Mismatch
-        title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
-        has_title = int(features_dict.get("HasTitle", 0)) == 1
-        if has_title and title_match < 0.2:
-            indicators.append("Domain-Brand Mismatch: Webpage title does not correspond with the actual registered domain name.")
-
-        # 8. External Links vs Self Links
-        ext_refs = int(features_dict.get("NoOfExternalRef", 0))
-        self_refs = int(features_dict.get("NoOfSelfRef", 0))
-        empty_refs = int(features_dict.get("NoOfEmptyRef", 0))
-        if ext_refs > 15 and (self_refs == 0 or ext_refs > self_refs * 3):
-            indicators.append(f"Cloned Template Pattern: High external reference count ({ext_refs} external vs {self_refs} internal links).")
-
-        if empty_refs >= 5:
-            indicators.append(f"Dummy Navigation Links: Found {empty_refs} dummy '#' links characteristic of hastily cloned templates.")
-
-        # 9. Hidden iFrames
-        iframes = int(features_dict.get("NoOfiFrame", 0))
-        if iframes >= 2:
-            indicators.append(f"Embedded Framing: {iframes} embedded iframes detected, which can conceal hidden credential collectors.")
-
-        # 10. Financial / Payment / Storefront Scam Patterns
-        bank = int(features_dict.get("Bank", 0)) == 1
-        pay = int(features_dict.get("Pay", 0)) == 1
-        crypto = int(features_dict.get("Crypto", 0)) == 1
-        has_social = int(features_dict.get("HasSocialNet", 0)) == 1
-        has_copy = int(features_dict.get("HasCopyrightInfo", 0)) == 1
-
-        if pay and (empty_refs >= 4 or ext_submit or not has_social or (has_title and title_match < 20) or self_refs <= 8):
-            indicators.append(
-                "Fraudulent Storefront / Payment Scam Pattern: Checkout/payment prompts paired with broken navigation links, missing brand verification, or low internal catalog depth — high risk of non-delivery or payment theft."
-            )
-        elif bank or pay or crypto:
-            target = "banking" if bank else ("payment" if pay else "crypto")
-            indicators.append(f"High-Value Target Spoofing: Page contains keywords and layouts imitating {target} services.")
-
-        if pay and not has_social and not has_copy:
-            indicators.append("Unverified Merchant Metadata: Shopping/payment page lacks authentic social profiles and verified copyright metadata.")
+            indicators.append("Insecure HTTP connection detected (transport lacks TLS encryption).")
+        if has_pwd and ext_sub:
+            indicators.append("High credential risk: password form submits to a different external domain.")
+        elif has_pwd and not is_https:
+            indicators.append("Credential form served over unencrypted HTTP connection.")
 
         if not indicators:
-            indicators.append(f"Anomalous URL Architecture: Model detected high-confidence phishing patterns ({risk_level} Risk).")
-            indicators.append("Statistical feature distribution strongly matches verified fake login datasets.")
-    else:
-        # Legitimate indicators — build user trust with clear, verifiable signals
-        is_https = int(features_dict.get("IsHTTPS", 1)) == 1
-        if is_https:
-            indicators.append("Encrypted Protocol: Connection uses valid HTTPS transport encryption.")
-
-        has_pwd = int(features_dict.get("HasPasswordField", 0)) == 1
-        if not has_pwd:
-            indicators.append("No Deceptive Credential Traps: Page does not request unexpected password harvesting.")
-
-        ext_submit = int(features_dict.get("HasExternalFormSubmit", 0)) == 1
-        if not ext_submit:
-            indicators.append("First-Party Actions: Checkout and form submissions stay on authorized domain endpoints.")
-
-        title_match = float(features_dict.get("DomainTitleMatchScore", 1.0))
-        if title_match >= 20.0 or title_match == 1.0:
-            indicators.append("Domain-Brand Consistency: Hostname matches verified title identity metadata.")
-
-        self_refs = int(features_dict.get("NoOfSelfRef", 0))
-        empty_refs = int(features_dict.get("NoOfEmptyRef", 0))
-        if self_refs >= 10 and empty_refs <= 3:
-            indicators.append(f"Complete Site Navigation: Verified {self_refs} internal links with minimal broken '#' placeholders.")
-
-        has_social = int(features_dict.get("HasSocialNet", 0)) == 1
-        has_copy = int(features_dict.get("HasCopyrightInfo", 0)) == 1
-        if has_social or has_copy:
-            indicators.append("Authentic Publisher Metadata: Site includes verifiable copyright notices or official social links.")
-
-        if not indicators:
-            indicators.append("Clean Architecture: No anomalous redirects or obfuscations detected.")
-            indicators.append("Structural Integrity: Feature vectors conform to standard web standards.")
-
+            if is_phishing or risk_level in ("HIGH", "CRITICAL"):
+                indicators.append(f"Elevated multi-factor risk patterns observed ({risk_level} risk).")
+            else:
+                indicators.append("No high-risk URL, credential, payment, or threat-feed indicators observed.")
     return indicators
 
 
-def build_analysis_prompt(url: str, hostname: str, risk_level: str, phishing_prob: float, indicators: list[str], is_phishing: bool = True) -> str:
-    """Constructs a cybersecurity analyst prompt for LLM explanation."""
-    if is_phishing:
-        indicators_text = "\n".join([f"- {ind}" for ind in indicators]) if indicators else "- General URL and structural anomalies."
-        return f"""You are an elite Cybersecurity Incident Responder and Explainable AI (XAI) security expert.
-A user is browsing the web and our AI Phishing Shield flagged the following webpage:
+def build_analysis_prompt(
+    url: str,
+    hostname: str,
+    risk_level: str,
+    phishing_prob: float,
+    indicators: list[str],
+    assessment: dict | None = None,
+    attributions: list[dict] | None = None,
+) -> str:
+    """Build an accurate, non-hyperbolic cybersecurity explanation prompt for Groq AI."""
+    ind_txt = "\n".join(f"- {x}" for x in indicators) if indicators else "- No strong risk signals detected."
+    dims_txt = ""
+    if assessment and assessment.get("dimensions"):
+        dims_txt = "\nSeparated Risk Dimensions:\n" + "\n".join(
+            f"- {k}: {v.get('level')} ({v.get('status') or v.get('score')})"
+            for k, v in assessment["dimensions"].items()
+        )
+    attr_txt = ""
+    if attributions:
+        attr_txt = "\nTop Model Feature Contributions:\n" + "\n".join(
+            f"- {a['feature']}={a['value']} ({a['direction']}, {a['risk_contribution']})"
+            for a in attributions[:5]
+        )
 
-URL: {url}
-Hostname: {hostname}
-Verdict: Phishing Detected ({risk_level} Risk, {phishing_prob * 100:.1f}% confidence)
-
-Detected Technical Red Flags:
-{indicators_text}
-
-Provide an Explainable AI (XAI) security briefing for the user with the following sections:
-1. Threat Summary: In 2 sentences, explain what this site appears to be doing (e.g., fake online shopping / non-delivery payment scam, brand impersonation, or credential harvesting) and why our AI flagged it beyond basic blocklists.
-2. Why It Is Dangerous: 3 concise bullet points explaining the exact risks if the user continues (such as lost money/non-delivered orders or stolen credentials).
-3. Recommended Action: 1 direct, actionable sentence advising the user (e.g. close the tab, do not enter payment details or credentials).
-
-Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 140 words."""
-    else:
-        safety_text = "\n".join([f"- {ind}" for ind in indicators]) if indicators else "- Valid security signals."
-        return f"""You are an elite Cybersecurity Analyst and Explainable AI (XAI) security expert.
-A user is browsing the web and our AI Phishing Shield evaluated the following webpage as SAFE / LEGITIMATE:
-
-URL: {url}
-Hostname: {hostname}
-Verdict: Verified Safe ({risk_level} Risk, {(1 - phishing_prob) * 100:.1f}% safety confidence)
-
-Verified Security Signals:
-{safety_text}
-
-Provide a concise Explainable AI (XAI) safety briefing for the user with the following sections:
-1. Safety Assessment: In 1-2 sentences, explain why this domain and page structure appear genuine and trustworthy.
-2. Key Safety Factors: 2-3 concise bullet points highlighting positive security signals (e.g., legitimate domain reputation, valid structure, lack of deceptive patterns).
-3. Browsing Tip: 1 sentence reminding the user to remain vigilant even on legitimate sites.
-
-Formatting: Use concise Markdown with emoji bullet points. Do not include conversational filler. Keep it under 120 words."""
+    return (
+        "You are a Cybersecurity Safety Analyst writing a clear, factual website risk briefing.\n"
+        "Never claim statistical correlation proves malicious intent; cite only observed evidence.\n\n"
+        f"URL: {url}\nHostname: {hostname}\nOverall Risk Level: {risk_level}\n"
+        f"Heuristic Risk Index: {round(phishing_prob * 100, 1)}/100\n"
+        f"{dims_txt}\n{attr_txt}\n\nObserved Evidence:\n{ind_txt}\n\n"
+        "Provide:\n"
+        "1. **Assessment Summary** (1-2 concise sentences explaining why the risk level was assigned)\n"
+        "2. **Key Contributing Signals** (2-3 factual bullet points)\n"
+        "3. **Recommended Action** (1 direct sentence telling the user whether it is safe to browse, login, download, or pay)\n"
+        "Keep under 140 words."
+    )
 
 
 def call_groq_ai(prompt: str, api_key: str) -> str:
-    """
-    Calls Groq's OpenAI-compatible Chat Completions endpoint using fast available models.
-    """
-    models = [
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
-    ]
+    """Call Groq OpenAI-compatible Chat Completions endpoint."""
+    models = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
-        "User-Agent": "PhishGuard-AI/1.0",
+        "User-Agent": "PhishGuard-AI/2.0",
     }
-
     last_error = None
     for model in models:
         payload = {
             "model": model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an elite Cybersecurity Incident Responder providing concise, expert Explainable AI (XAI) security briefings for users.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
+                {"role": "system", "content": "You provide accurate, evidence-based cybersecurity risk explanations."},
+                {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 1024,
+            "max_tokens": 512,
         }
         if "gpt-oss" in model:
             payload["reasoning_effort"] = "low"
-
-        data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
-            data=data,
+            data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
         )
-
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                resp_json = json.loads(resp.read().decode("utf-8"))
-                choices = resp_json.get("choices", [])
-                if choices:
-                    content = choices[0].get("message", {}).get("content", "")
-                    if content and content.strip():
-                        logger.info(f"Groq AI explanation generated successfully using {model}.")
-                        return content.strip()
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                content = (body.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+                if content:
+                    return content
         except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="ignore")
-            logger.warning(f"Groq API ({model}) HTTP error {e.code}: {err_body}")
-            last_error = f"HTTP {e.code}: {err_body}"
+            last_error = f"HTTP {e.code}"
             if e.code in (401, 403):
-                raise ValueError("Invalid Groq API key. Please check your key at console.groq.com.")
-            continue
+                raise ValueError("Invalid Groq API key.")
         except Exception as e:
-            logger.warning(f"Groq API ({model}) error: {e}")
             last_error = str(e)
-            continue
-
-    raise RuntimeError(f"Unable to generate explanation from Groq API ({last_error})")
+    raise RuntimeError(f"Groq AI unavailable ({last_error})")
 
 
 def generate_explanation(
@@ -274,88 +218,58 @@ def generate_explanation(
     phishing_prob: float,
     features_dict: dict,
     api_key: str | None = None,
+    assessment: dict | None = None,
+    attributions: list[dict] | None = None,
 ) -> dict:
-    """
-    Main entry point for generating explanations.
-    Uses Groq AI API; falls back to rule-based XAI if unavailable.
-    """
-    backend_indicators = features_dict.get("_backend_indicators") if isinstance(features_dict, dict) else None
-    indicators = extract_top_indicators(features_dict, is_phishing, risk_level, backend_indicators=backend_indicators)
-    key = (
-        api_key
-        or os.getenv("GROQ_API_KEY")
-        or DEFAULT_GROQ_KEY
-    )
+    """Generate human-readable multi-layer explanation with SHAP/feature attributions and Groq fallback."""
+    backend_inds = (assessment or {}).get("evidence") or (features_dict.get("_backend_indicators") if isinstance(features_dict, dict) else None)
+    indicators = extract_top_indicators(features_dict, is_phishing, risk_level, backend_indicators=backend_inds)
+    attr_list = attributions or []
 
-    if key and key.strip():
-        clean_key = key.strip()
+    key = (api_key or os.getenv("GROQ_API_KEY") or DEFAULT_GROQ_KEY or "").strip()
+    if key:
         try:
-            prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators, is_phishing=is_phishing)
-            ai_text = call_groq_ai(prompt, clean_key)
-
+            prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators, assessment, attr_list)
+            ai_text = call_groq_ai(prompt, key)
             return {
                 "explanation": ai_text,
                 "top_indicators": indicators,
+                "feature_attributions": attr_list,
                 "source": "groq",
             }
         except Exception as e:
-            logger.warning(f"Falling back to rule-based explanation due to API error: {e}")
-            err_str = str(e)
-            if "HTTP 503" in err_str or "Service Unavailable" in err_str:
-                service_note = "AI servers are experiencing temporary high demand; displaying local XAI analysis."
-            elif "timed out" in err_str.lower():
-                service_note = "Cloud AI response timed out; displaying local XAI analysis."
-            elif "Invalid" in err_str:
-                service_note = "Groq API key is invalid or expired."
-            else:
-                service_note = "Cloud AI temporarily unavailable; displaying local XAI analysis."
-
-            if is_phishing:
-                fallback_text = (
-                    f"### ⚠️ Explainable AI Threat Breakdown\n\n"
-                    f"**Threat Assessment:** This page scored a **{phishing_prob*100:.1f}% phishing probability** ({risk_level} Risk). "
-                    f"The layout and URL characteristics match known credential-theft patterns.\n\n"
-                    f"**Identified Red Flags:**\n" +
-                    "\n".join([f"- 🚨 {ind}" for ind in indicators]) +
-                    f"\n\n*({service_note})*"
-                )
-            else:
-                fallback_text = (
-                    f"### 🛡️ Explainable AI Safety Assessment\n\n"
-                    f"**Safety Assessment:** This page scored a **{(1-phishing_prob)*100:.1f}% safety confidence** ({risk_level} Risk). "
-                    f"Structural signals and domain parameters appear legitimate.\n\n"
-                    f"**Verified Indicators:**\n" +
-                    "\n".join([f"- 🛡️ {ind}" for ind in indicators]) +
-                    f"\n\n*({service_note})*"
-                )
-            return {
-                "explanation": fallback_text,
-                "top_indicators": indicators,
-                "source": "rule_based_fallback",
-                "error": str(e),
-            }
-
-    # Rule-based fallback
-    if is_phishing:
-        rule_text = (
-            f"### 🛡️ Explainable AI Threat Breakdown\n\n"
-            f"**Threat Assessment:** The AI classifier flagged **{hostname or url}** with **{phishing_prob*100:.1f}% phishing confidence** ({risk_level} Risk). "
-            f"The page exhibits behavioral and architectural anomalies common in deceptive phishing operations.\n\n"
-            f"**Top Detected Red Flags:**\n" +
-            "\n".join([f"- 🚨 {ind}" for ind in indicators]) +
-            f"\n\n**Safety Advice:** Do not submit usernames, passwords, or financial information. Close this page immediately."
-        )
+            logger.warning(f"Groq explanation fallback triggered: {e}")
+            err_msg = str(e)
     else:
-        rule_text = (
-            f"### 🛡️ Explainable AI Security Breakdown\n\n"
-            f"**Safety Assessment:** **{hostname or url}** is classified as legitimate with **{(1 - phishing_prob)*100:.1f}% confidence**. "
-            f"No malicious form actions, URL obfuscations, or credential-harvesting indicators were detected."
+        err_msg = None
+
+    action = (assessment or {}).get("recommended_action") or (
+        "Avoid entering credentials, payment details, or downloading files until verified."
+        if risk_level in ("MEDIUM", "HIGH", "CRITICAL", "UNKNOWN")
+        else "No major risk indicators observed across checked dimensions."
+    )
+    bullets = "\n".join(f"- {ind}" for ind in indicators) if indicators else "- Standard baseline heuristics inspected."
+    attr_bullets = ""
+    if attr_list:
+        attr_bullets = "\n\n**Top Model Feature Attributions:**\n" + "\n".join(
+            f"- `{a['feature']}` = `{a['value']}` ({a['direction']}: `{a['risk_contribution']}`)"
+            for a in attr_list[:4]
         )
+
+    rule_text = (
+        f"### Website Safety Assessment ({risk_level} Risk)\n\n"
+        f"**Target:** `{hostname or url}`  \n"
+        f"**Heuristic Risk Index:** **{phishing_prob * 100:.0f}/100** *(note: heuristic indicators measure risk signals, not proof of intent)*\n\n"
+        f"**Observed Evidence:**\n{bullets}{attr_bullets}\n\n"
+        f"**Recommended Action:** {action}"
+    )
 
     return {
         "explanation": rule_text,
         "top_indicators": indicators,
-        "source": "rule_based",
+        "feature_attributions": attr_list,
+        "source": "rule_based_fallback" if err_msg else "rule_based",
+        "error": err_msg,
     }
 
 
@@ -365,17 +279,12 @@ if __name__ == "__main__":
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
             pass
-    print("Running Explainable AI (XAI) Diagnostic Self-Test...")
-    test_res = generate_explanation(
-        url="https://google.com",
-        hostname="google.com",
+    res = generate_explanation(
+        url="https://example.com",
+        hostname="example.com",
         is_phishing=False,
-        risk_level="SAFE",
-        phishing_prob=0.015,
-        features_dict={"URLLength": 18, "IsHTTPS": 1, "HasPasswordField": 0},
+        risk_level="LOW",
+        phishing_prob=0.05,
+        features_dict={"IsHTTPS": 1},
     )
-    print(f"\nEngine Source: {test_res.get('source')}")
-    print("\nGenerated Explanation:\n")
-    print(test_res.get("explanation"))
-
-
+    print(res["explanation"])

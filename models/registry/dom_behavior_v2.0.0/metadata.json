@@ -1,0 +1,73 @@
+{
+  "role": "dom_behavior",
+  "version": "v2.0.0",
+  "algorithm": "DOM Random Forest",
+  "created_at": "2026-11-27T17:11:44.080696+00:00",
+  "feature_count": 36,
+  "feature_columns": [
+    "num_password_fields",
+    "num_username_email_inputs",
+    "num_login_forms",
+    "has_external_form_action",
+    "num_cross_domain_forms",
+    "num_hidden_credential_inputs",
+    "suspicious_login_indicators",
+    "brand_domain_mismatch",
+    "total_forms",
+    "external_forms_count",
+    "has_post_form",
+    "num_sensitive_inputs",
+    "num_payment_inputs",
+    "has_suspicious_payment_dest",
+    "has_prepaid_without_cod",
+    "has_restrictive_refund_terms",
+    "num_iframes",
+    "num_hidden_iframes",
+    "num_external_scripts",
+    "popup_trigger_count",
+    "fake_download_button_count",
+    "suspicious_link_ratio",
+    "meta_refresh_redirects",
+    "js_redirect_indicators",
+    "misleading_button_count",
+    "external_link_ratio",
+    "notification_prompt_requested",
+    "inline_script_count",
+    "suspicious_inline_js_count",
+    "obfuscated_js_score",
+    "dynamic_dom_mutation_count",
+    "html_line_count",
+    "has_title",
+    "domain_title_match_score",
+    "has_copyright_notice",
+    "has_official_contact_cue"
+  ],
+  "metrics": {
+    "CV F1 (Domain-Grouped)": 0.8665,
+    "Val F1": 0.9455,
+    "Temporal F1": 0.9536,
+    "Accuracy": 0.8364779874213837,
+    "Precision": 0.8545454545454545,
+    "Recall": 0.9038461538461539,
+    "F1 Score": 0.8785046728971962,
+    "ROC AUC": 0.902972027972028,
+    "PR AUC": 0.8490223294481305,
+    "FPR": 0.09615384615384616,
+    "FNR": 0.2909090909090909,
+    "Training Time (s)": 2.271
+  },
+  "dataset_lineage": {
+    "train_rows": 572,
+    "val_rows": 82,
+    "test_rows": 159,
+    "sources": {
+      "phreshphish": 568,
+      "custom_verified_fixture": 4
+    },
+    "split_strategy": "domain_grouped_and_temporal"
+  },
+  "promotion_passed": true,
+  "promotion_gate_notes": [
+    "All validation gates passed."
+  ]
+}
