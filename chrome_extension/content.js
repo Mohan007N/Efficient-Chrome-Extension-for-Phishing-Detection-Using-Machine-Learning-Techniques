@@ -19,6 +19,13 @@
     escapeHtml: (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
     computeDomFingerprint: () => "dom_0",
     computeCharStats: () => ({ spacialCharRatioInURL: 0, charContinuationRate: 0 }),
+    extractRootDomain: (h) => {
+      const clean = String(h || "").toLowerCase().trim().replace(/\.$/, "").replace(/^www\./, "");
+      const parts = clean.split(".").filter(Boolean);
+      return parts.length >= 2 ? parts.slice(-2).join(".") : clean;
+    },
+    shannonEntropy: () => 0,
+    detectBrandImpersonation: () => ({ score: 0, matchedBrand: null, brandDomainMismatch: 0 }),
   };
 
   const SERP_PATTERNS = [
@@ -32,8 +39,13 @@
   ];
 
   const SCAN_KEY = "__webshield_last_sig_v3__";
+  const MUTATION_COOLDOWN_MS = 2500;
+  const MUTATION_WINDOW_MS = 60000;
+  const MAX_MUTATIONS_PER_WINDOW = 6;
   let debounceTimer = null;
-  let mutationScanCount = 0;
+  let lastMutationScanAt = 0;
+  let mutationTimestamps = [];
+  let lastObservedUrl = window.location.href;
 
   function countMatches(str, regex) {
     const m = str.match(regex);
@@ -41,15 +53,7 @@
   }
 
   function extractRootDomain(hostname) {
-    const host = (hostname || "").toLowerCase().trim().replace(/\.$/, "");
-    if (!host) return "";
-    const clean = host.startsWith("www.") ? host.slice(4) : host;
-    const parts = clean.split(".").filter(Boolean);
-    const compound = new Set(["co", "com", "net", "org", "gov", "edu", "ac"]);
-    if (parts.length >= 3 && compound.has(parts[parts.length - 2]) && parts[parts.length - 1].length === 2) {
-      return parts.slice(-3).join(".");
-    }
-    return parts.length >= 2 ? parts.slice(-2).join(".") : clean;
+    return U.extractRootDomain ? U.extractRootDomain(hostname) : String(hostname || "").toLowerCase();
   }
 
   function isIPAddress(hostname) {
@@ -123,9 +127,10 @@
       if (method === "post") hasPostForm = 1;
       const action = (form.getAttribute("action") || "").trim();
       let isExt = false;
-      if (action.startsWith("http://") || action.startsWith("https://")) {
+      if (action.startsWith("http://") || action.startsWith("https://") || action.startsWith("//")) {
         try {
-          const ahost = new URL(action).hostname.toLowerCase();
+          const resolvedAction = action.startsWith("//") ? `${proto}${action}` : action;
+          const ahost = new URL(resolvedAction).hostname.toLowerCase();
           if (ahost && extractRootDomain(ahost) !== rootDomain && ahost !== hostname) isExt = true;
         } catch {
           isExt = true;
@@ -147,15 +152,22 @@
       }
     });
 
+    const brandInfo = U.detectBrandImpersonation
+      ? U.detectBrandImpersonation(hostname, titleRaw)
+      : { score: 0, matchedBrand: null, brandDomainMismatch: 0 };
+    const brandDomainMismatch = Number(brandInfo.brandDomainMismatch || 0);
     const hasExternalFormAction = externalForms > 0 ? 1 : 0;
     const suspiciousLoginIndicators =
       (pwdInputs > 0 && !isHttps ? 1 : 0) +
-      (pwdInputs > 0 && hasExternalFormAction ? 1 : 0);
+      (pwdInputs > 0 && hasExternalFormAction ? 1 : 0) +
+      (numLoginForms > 0 && brandDomainMismatch === 1 ? 1 : 0);
 
-    const hasPrepaid = /(upi|razorpay|paytm|cashfree|payu|prepaid|qr\s*code|pay\s+now|credit\s+card|debit\s+card)/i.test(lowerText + " " + lowerHtml);
+    const prepaidRe = /(upi|razorpay|paytm|cashfree|payu|prepaid|qr\s*code|pay\s+now|credit\s+card|debit\s+card)/i;
+    const hasPrepaidText = prepaidRe.test(lowerText);
+    const hasPrepaidHtml = hasPrepaidText || prepaidRe.test(lowerHtml);
     const hasCod = /(cash\s+on\s+delivery|pay\s+on\s+delivery|\bcod\s+available\b)/i.test(lowerText);
-    const isCommerce = hasPrepaid || /(add\s+to\s+cart|buy\s+now|checkout|shopping\s+cart)/i.test(lowerText);
-    const hasPrepaidWithoutCod = isCommerce && hasPrepaid && !hasCod ? 1 : 0;
+    const isCommerce = hasPrepaidHtml || /(add\s+to\s+cart|buy\s+now|checkout|shopping\s+cart)/i.test(lowerText);
+    const hasPrepaidWithoutCod = isCommerce && hasPrepaidText && !hasCod ? 1 : 0;
     const hasRestrictiveRefund = /(store\s+credit|wallet\s+credit|credit\s+note\s+only|no\s+refund|non[- ]refundable|no\s+return|final\s+sale)/i.test(lowerText) ? 1 : 0;
 
     const iframes = Array.from(document.querySelectorAll("iframe"));
@@ -206,7 +218,10 @@
           inlineScriptCount++;
           suspiciousInlineJs += countMatches(code, /\b(?:eval|Function|atob|unescape|fromCharCode|document\.write)\s*\(/g);
           const hexEsc = countMatches(code, /\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}/g);
-          if (hexEsc >= 8) obfuscatedJsScore = Math.min(1, Math.max(obfuscatedJsScore, 0.5 + hexEsc / 30));
+          const ent = code.length > 250 && U.shannonEntropy ? U.shannonEntropy(code.slice(0, 2000)) : 0;
+          if ((code.length > 250 && ent > 5.2) || hexEsc >= 8) {
+            obfuscatedJsScore = Math.min(1, Math.max(obfuscatedJsScore, 0.5 + Math.min(0.5, hexEsc / 30)));
+          }
           dynamicMutationCount += countMatches(code, /createElement\s*\(\s*['"](?:script|iframe)['"]|innerHTML\s*=|insertAdjacentHTML/g);
           popupCount += countMatches(code, /window\.open\(/g);
           jsRedirectCount += countMatches(code, /(?:window|document|top)\.location(?:\.href)?\s*=|location\.replace\(/g);
@@ -236,9 +251,10 @@
       let isExtLink = false;
       if (!hlow || hlow === "#" || hlow.startsWith("javascript:")) {
         emptyLinks++;
-      } else if (hlow.startsWith("http://") || hlow.startsWith("https://")) {
+      } else if (hlow.startsWith("http://") || hlow.startsWith("https://") || hlow.startsWith("//")) {
         try {
-          const lh = new URL(href).hostname.toLowerCase();
+          const resolvedHref = href.startsWith("//") ? `${proto}${href}` : href;
+          const lh = new URL(resolvedHref).hostname.toLowerCase();
           if (extractRootDomain(lh) === rootDomain || lh === hostname) selfLinks++;
           else { extLinks++; isExtLink = true; }
         } catch { emptyLinks++; }
@@ -279,7 +295,7 @@
       num_cross_domain_forms: externalForms,
       num_hidden_credential_inputs: numHiddenCredInputs,
       suspicious_login_indicators: suspiciousLoginIndicators,
-      brand_domain_mismatch: 0,
+      brand_domain_mismatch: brandDomainMismatch,
       total_forms: forms.length,
       external_forms_count: externalForms,
       has_post_form: hasPostForm,
@@ -464,11 +480,27 @@
     debounceTimer = setTimeout(() => runScan(force), delayMs);
   }
 
+  function handleSpaNavigation() {
+    const nextUrl = window.location.href;
+    if (nextUrl !== lastObservedUrl) {
+      lastObservedUrl = nextUrl;
+      mutationTimestamps = [];
+      lastMutationScanAt = 0;
+      delete window[SCAN_KEY];
+      scheduleDebouncedScan(false, 400);
+    }
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "PHISHING_RESULT" && message.data) {
       injectWarningBanner(message.data);
     }
+    if (message.type === "URL_CHANGED") {
+      handleSpaNavigation();
+    }
     if (message.type === "TRIGGER_RESCAN") {
+      mutationTimestamps = [];
+      lastMutationScanAt = 0;
       delete window[SCAN_KEY];
       runScan(true);
       sendResponse({ ok: true });
@@ -476,10 +508,13 @@
     }
   });
 
-  // Throttled MutationObserver invalidates stale DOM signature when login/payment forms or iframes inject dynamically
+  // Sliding-window throttled MutationObserver detects dynamic forms, iframes, or SPA route updates without stopping permanently
   if (typeof MutationObserver !== "undefined" && document.documentElement) {
     const observer = new MutationObserver((mutations) => {
-      if (mutationScanCount >= 3) return;
+      if (window.location.href !== lastObservedUrl) {
+        handleSpaNavigation();
+        return;
+      }
       let structuralChange = false;
       for (const m of mutations) {
         for (const node of m.addedNodes || []) {
@@ -493,15 +528,48 @@
         }
         if (structuralChange) break;
       }
-      if (structuralChange) {
-        mutationScanCount++;
-        scheduleDebouncedScan(false, 1600);
+      if (!structuralChange) return;
+
+      const now = Date.now();
+      mutationTimestamps = mutationTimestamps.filter((ts) => now - ts < MUTATION_WINDOW_MS);
+      if (mutationTimestamps.length >= MAX_MUTATIONS_PER_WINDOW) return;
+      if (now - lastMutationScanAt < MUTATION_COOLDOWN_MS) {
+        scheduleDebouncedScan(false, MUTATION_COOLDOWN_MS);
+        return;
       }
+      lastMutationScanAt = now;
+      mutationTimestamps.push(now);
+      scheduleDebouncedScan(false, 1200);
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
+  // Wrap history pushState/replaceState and poll URL changes so SPA navigations always re-trigger scanning
+  try {
+    const origPushState = window.history.pushState;
+    const origReplaceState = window.history.replaceState;
+    if (typeof origPushState === "function") {
+      window.history.pushState = function (...args) {
+        const ret = origPushState.apply(this, args);
+        handleSpaNavigation();
+        return ret;
+      };
+    }
+    if (typeof origReplaceState === "function") {
+      window.history.replaceState = function (...args) {
+        const ret = origReplaceState.apply(this, args);
+        handleSpaNavigation();
+        return ret;
+      };
+    }
+  } catch (_) {}
+
   scheduleDebouncedScan(false);
-  window.addEventListener("popstate", () => { mutationScanCount = 0; scheduleDebouncedScan(false); });
-  window.addEventListener("hashchange", () => scheduleDebouncedScan(false));
+  window.addEventListener("popstate", handleSpaNavigation);
+  window.addEventListener("hashchange", handleSpaNavigation);
+  setInterval(() => {
+    if (window.location.href !== lastObservedUrl) {
+      handleSpaNavigation();
+    }
+  }, 1000);
 })();

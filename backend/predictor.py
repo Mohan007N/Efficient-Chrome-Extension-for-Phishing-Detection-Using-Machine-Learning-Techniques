@@ -7,13 +7,14 @@ Loads & validates:
 - Model 3: Brand Impersonation Detector (`src/features.py`)
 - Model 4: Credential & Payment Risk Detector (`src/dom_features.py`)
 - Model 5: Threat Intelligence Engine (`backend/intel.py`)
-- Optional SSRF-guarded Playwright Inspector (`src/playwright_inspector.py`)
 - Risk Fusion: HybridRiskEngine (`backend/risk_engine.py`)
 
 v3.0 Safety Guarantees:
-- Explicitly resolves `model.classes_` (`0 = Phishing/Malicious`, `1 = Benign/Legitimate`) and fails
-  validation if required class labels are missing.
-- Verifies active model SHA-256 checksums against `models/registry/active_manifest.json`.
+- Verifies SHA-256 checksums for ALL promoted registry artifacts (model, feature_columns, encoders)
+  prior to loading.
+- Explicitly resolves `model.classes_` (`0 = Phishing/Malicious`, `1 = Benign/Legitimate`).
+- Passes loaded operating thresholds (`url_threshold`, `dom_threshold`) into `HybridRiskEngine`.
+- Treats empty DOM dictionaries (`dom_features={}`) as non-observed (`has_dom_observation=False`).
 - Never lets trusted reputation / whitelist skip deep scan or override critical threats.
 - Never fabricates ML `phishing_probability` from `heuristic_risk_index / 100`.
 """
@@ -31,11 +32,15 @@ import pandas as pd
 from backend.intel import UnauthorizedIntelEngine
 from backend.risk_engine import HybridRiskEngine
 from backend.security import is_private_or_local_target, sanitize_telemetry_dict
-from src.dom_features import DOM_FEATURE_COLUMNS, extract_dom_features_from_html, normalize_dom_feature_dict
+from src.dom_features import (
+    DOM_FEATURE_COLUMNS,
+    extract_dom_features_from_html,
+    has_meaningful_dom_observation,
+    normalize_dom_feature_dict,
+)
 from src.evaluate import get_class_probabilities, resolve_class_indices
 from src.features import URL_FEATURE_COLUMNS, extract_root_domain, extract_url_features
 from src.model_registry import get_active_registry_manifest, verify_active_model_integrity
-from src.playwright_inspector import inspect_page_with_playwright
 
 logger = logging.getLogger("PhishingAPI.Predictor")
 
@@ -83,10 +88,11 @@ class PhishingPredictor:
             return False
 
     def load(self):
-        """Load versioned URL & DOM models, verify registry checksums + classes_, and load threat intel."""
+        """Verify ALL registry checksums, load versioned URL & DOM models + classes_, and load intel."""
         self._model_errors = []
         self._integrity_ok = True
         self._url_model = None
+        self._url_encoders = {}
         self._dom_model = None
         self.manifest = get_active_registry_manifest(models_dir=self.models_dir)
 
@@ -97,72 +103,62 @@ class PhishingPredictor:
         url_feat_path = os.path.join(self.models_dir, "url_feature_columns.pkl")
 
         if os.path.exists(url_model_path):
+            url_hash_ok = True
             if "url_risk" in self.manifest.get("models", {}):
-                ok_hash, hash_msg = verify_active_model_integrity("url_risk", models_dir=self.models_dir)
-                if not ok_hash:
+                url_hash_ok, hash_msg = verify_active_model_integrity("url_risk", models_dir=self.models_dir)
+                if not url_hash_ok:
                     self._integrity_ok = False
                     self._url_model_status = "checksum_mismatch"
                     self._model_errors.append(hash_msg)
-                else:
-                    candidate = joblib.load(url_model_path)
-                    if self._validate_loaded_model(candidate, "url_risk"):
-                        self._url_model = candidate
-                        self._url_model_status = "loaded"
-                    else:
-                        self._url_model_status = "invalid_classes"
-            else:
+
+            if url_hash_ok:
                 candidate = joblib.load(url_model_path)
                 if self._validate_loaded_model(candidate, "url_risk"):
                     self._url_model = candidate
                     self._url_model_status = "loaded"
+                    if os.path.exists(url_enc_path):
+                        self._url_encoders = joblib.load(url_enc_path)
+                    if os.path.exists(url_feat_path):
+                        self._url_features = joblib.load(url_feat_path)
                 else:
                     self._url_model_status = "invalid_classes"
         else:
             self._url_model_status = "missing"
             self._model_errors.append(f"Missing URL model file: {url_model_path}")
 
-        if os.path.exists(url_enc_path):
-            self._url_encoders = joblib.load(url_enc_path)
-        if os.path.exists(url_feat_path):
-            self._url_features = joblib.load(url_feat_path)
         self._url_threshold = float(((self.manifest.get("models") or {}).get("url_risk") or {}).get("threshold", 0.50))
 
         dom_model_path = os.path.join(self.models_dir, "dom_model.pkl")
         dom_feat_path = os.path.join(self.models_dir, "dom_feature_columns.pkl")
         if os.path.exists(dom_model_path):
+            dom_hash_ok = True
             if "dom_behavior" in self.manifest.get("models", {}):
-                ok_hash, hash_msg = verify_active_model_integrity("dom_behavior", models_dir=self.models_dir)
-                if not ok_hash:
+                dom_hash_ok, hash_msg = verify_active_model_integrity("dom_behavior", models_dir=self.models_dir)
+                if not dom_hash_ok:
                     self._integrity_ok = False
                     self._dom_model_status = "checksum_mismatch"
                     self._model_errors.append(hash_msg)
-                else:
-                    candidate = joblib.load(dom_model_path)
-                    if self._validate_loaded_model(candidate, "dom_behavior"):
-                        self._dom_model = candidate
-                        self._dom_model_status = "loaded"
-                    else:
-                        self._dom_model_status = "invalid_classes"
-            else:
+
+            if dom_hash_ok:
                 candidate = joblib.load(dom_model_path)
                 if self._validate_loaded_model(candidate, "dom_behavior"):
                     self._dom_model = candidate
                     self._dom_model_status = "loaded"
+                    if os.path.exists(dom_feat_path):
+                        self._dom_features = joblib.load(dom_feat_path)
                 else:
                     self._dom_model_status = "invalid_classes"
         else:
             self._dom_model_status = "missing"
             self._model_errors.append(f"Missing DOM model file: {dom_model_path}")
 
-        if os.path.exists(dom_feat_path):
-            self._dom_features = joblib.load(dom_feat_path)
         self._dom_threshold = float(((self.manifest.get("models") or {}).get("dom_behavior") or {}).get("threshold", 0.50))
 
         self.intel.load()
 
         logger.info(
-            f"Models loaded — url_model={self.url_model_type()} ({self._url_model_status}, {len(self._url_features)} cols), "
-            f"dom_model={self.dom_model_type()} ({self._dom_model_status}, {len(self._dom_features)} cols)"
+            f"Models loaded — url_model={self.url_model_type()} ({self._url_model_status}, {len(self._url_features)} cols, thr={self._url_threshold}), "
+            f"dom_model={self.dom_model_type()} ({self._dom_model_status}, {len(self._dom_features)} cols, thr={self._dom_threshold})"
         )
 
     def is_ready(self) -> bool:
@@ -250,10 +246,9 @@ class PhishingPredictor:
         redirect_chain: list[str] | None = None,
         legacy_payload: dict | None = None,
         deep_scan: bool = True,
-        use_playwright: bool = False,
         reachability: dict | None = None,
     ) -> dict[str, Any]:
-        """Full multi-layer website safety and trust assessment."""
+        """Full multi-layer website safety and trust assessment using URL ML, static/extension DOM ML, and rules."""
         clean_legacy = sanitize_telemetry_dict(legacy_payload or {})
         clean_dom_input = sanitize_telemetry_dict(dom_features or {})
 
@@ -266,25 +261,16 @@ class PhishingPredictor:
         has_dom_observation = False
         analysis_mode = "url_only"
         resolved_dom: dict = {}
-        pw_redirects: list[str] = []
-
-        if use_playwright and not is_local and not html and not clean_dom_input and url:
-            pw_res = inspect_page_with_playwright(url)
-            if pw_res.get("ok") and pw_res.get("html"):
-                html = pw_res["html"]
-                analysis_mode = pw_res.get("analysis_mode", "live_browser_dom")
-                pw_redirects = list(pw_res.get("redirect_chain") or [])
 
         if html and html.strip():
-            mode_used = analysis_mode if analysis_mode == "live_browser_dom" else "static_html"
-            resolved_dom = extract_dom_features_from_html(url, html, analysis_mode=mode_used)
-            analysis_mode = mode_used
+            resolved_dom = extract_dom_features_from_html(url, html, analysis_mode="static_html")
+            analysis_mode = "static_html"
             has_dom_observation = True
-        elif clean_dom_input:
+        elif has_meaningful_dom_observation(clean_dom_input):
             analysis_mode = str(clean_dom_input.get("analysis_mode") or "extension_dom")
             resolved_dom = normalize_dom_feature_dict(clean_dom_input, url=url)
             has_dom_observation = True
-        elif any(k in clean_legacy for k in ("LineOfCode", "HasPasswordField", "NoOfiFrame", "HasExternalFormSubmit")):
+        elif any(k in clean_legacy for k in ("LineOfCode", "HasPasswordField", "NoOfiFrame", "HasExternalFormSubmit", "HasTitle")):
             if int(clean_legacy.get("LineOfCode", 0) or 0) > 0 or int(clean_legacy.get("HasTitle", 0) or 0) > 0:
                 analysis_mode = "extension_dom"
                 resolved_dom = normalize_dom_feature_dict(clean_legacy, url=url)
@@ -313,13 +299,15 @@ class PhishingPredictor:
             dom_threat_prob=dom_threat_prob,
             dom_features=resolved_dom,
             intel_result=intel_res,
-            redirect_chain=redirect_chain or pw_redirects or (intel_res.get("forensics") or {}).get("redirect_chain"),
+            redirect_chain=redirect_chain or (intel_res.get("forensics") or {}).get("redirect_chain"),
             is_whitelisted=is_whitelisted,
             is_local=is_local,
             has_dom_observation=has_dom_observation,
             reachability=reachability,
             model_availability=self.model_availability_summary(),
             analysis_mode=analysis_mode,
+            url_threshold=self._url_threshold,
+            dom_threshold=self._dom_threshold,
         )
 
         overall = assessment["overall_risk_level"]

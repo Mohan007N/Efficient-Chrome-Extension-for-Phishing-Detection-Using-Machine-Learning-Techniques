@@ -6,12 +6,13 @@ Provides:
 - POST /predict (Chrome Extension compatible + separated ML probabilities vs heuristic risk)
 - POST /analyze-url, POST /analyze-dom, POST /analyze-website, POST /scan, GET /scan
 - POST /explain (Calibrated-aware SHAP + rule + optional Groq XAI synthesis)
-- POST /feedback, GET /feedback (quarantined human-review queue)
+- POST /feedback, GET /feedback (quarantined human-review queue with redacted query values)
 - GET /unauthorized-sites
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -53,7 +54,9 @@ from backend.security import (
     PayloadTooLargeError,
     RateLimiter,
     SSRFBlockedError,
+    check_api_key_authorized,
     get_allowed_cors_origins,
+    redact_url_query_params,
     safe_fetch_html,
     validate_safe_url,
 )
@@ -62,6 +65,7 @@ API_VERSION = "3.0.0"
 SCHEMA_VERSION = "3.0.0"
 MAX_REQUEST_BYTES = 2_000_000
 FEEDBACK_FILE = os.path.join(PROJECT_ROOT, "data", "feedback", "reports.jsonl")
+_PUBLIC_PATHS = {"/", "/health", "/version", "/docs", "/openapi.json", "/redoc"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +76,7 @@ logger = logging.getLogger("PhishingAPI")
 predictor: PhishingPredictor | None = None
 rate_limiter = RateLimiter()
 _stats_lock = threading.Lock()
+_feedback_lock = threading.Lock()
 _analytics = {
     "total_scans": 0,
     "risk_distribution": Counter(),
@@ -105,14 +110,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="WebShield AI — Multi-Layer Website Safety & Trust Assessment API",
     description=(
-        "v3.0 multi-layer assessment combining calibrated URL ML, DOM Behaviour ML, Brand Impersonation, "
-        "Credential & Payment Risk, Threat Intelligence, and SHAP/Groq Explainable AI."
+        "v3.0 multi-layer assessment combining calibrated URL ML, static/extension DOM Behaviour ML, "
+        "Brand Impersonation, Credential & Payment Risk, Threat Intelligence, and SHAP/Groq Explainable AI."
     ),
     version=API_VERSION,
     lifespan=lifespan,
 )
 
-# Strict CORS policy without mixing wildcard '*' and credentials
 allowed_origins = get_allowed_cors_origins()
 allow_creds = "*" not in allowed_origins
 
@@ -121,7 +125,7 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_credentials=allow_creds,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Accept", "Authorization"],
+    allow_headers=["Content-Type", "Accept", "Authorization", "X-API-Key"],
 )
 
 
@@ -142,10 +146,30 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def security_guard_middleware(request: Request, call_next):
-    """Enforce payload size ceiling and per-client sliding-window rate limiting."""
+    """
+    Enforce header + streaming request body size ceiling (defeats chunked bypass),
+    per-client sliding-window rate limiting, and optional API key authentication.
+    """
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:
         return JSONResponse(status_code=413, content={"detail": "Request payload exceeds 2 MB limit."})
+
+    # Enforce true byte ceiling even when Transfer-Encoding: chunked omits Content-Length
+    if request.method in ("POST", "PUT", "PATCH"):
+        chunks: list[bytes] = []
+        total_bytes = 0
+        async for chunk in request.stream():
+            if chunk:
+                total_bytes += len(chunk)
+                if total_bytes > MAX_REQUEST_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "Streaming request body exceeds 2 MB limit."})
+                chunks.append(chunk)
+        request._body = b"".join(chunks)
+
+    if request.method != "OPTIONS" and request.url.path not in _PUBLIC_PATHS:
+        auth_enabled, authorized = check_api_key_authorized(request.headers)
+        if auth_enabled and not authorized:
+            return JSONResponse(status_code=401, content={"detail": "Valid API key required."})
 
     client_ip = request.client.host if request.client else "unknown"
     if not rate_limiter.allow(client_ip):
@@ -233,12 +257,14 @@ async def get_model_info():
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Assessment"])
 async def predict(request: URLFeaturesRequest):
-    """Chrome Extension assessment endpoint (separated ML probability + heuristic risk + local handling)."""
+    """Chrome Extension assessment endpoint (offloaded from asyncio event loop)."""
     if predictor is None or not predictor.is_ready():
         raise HTTPException(status_code=503, detail="Models are not loaded.")
     try:
-        payload = request.model_dump()
-        result = predictor.predict(payload, deep_scan=True)
+        payload = request.model_dump(exclude_unset=True)
+        if request.dom_features is not None:
+            payload["dom_features"] = request.dom_features.model_dump(exclude_unset=True)
+        result = await asyncio.to_thread(predictor.predict, payload, True)
         _record_scan_stat(result["risk_level"])
         return PredictionResponse(**result)
     except Exception as e:
@@ -267,15 +293,15 @@ async def analyze_url(request: AnalyzeURLRequest):
     clean_url = _normalize_input_url(request.url)
 
     try:
-        validate_safe_url(clean_url, resolve_dns=request.fetch_live)
+        await asyncio.to_thread(validate_safe_url, clean_url, request.fetch_live)
     except SSRFBlockedError as se:
         raise HTTPException(status_code=400, detail=f"URL rejected by SSRF guard: {se}")
 
     html = None
     redirect_chain = None
-    if request.fetch_live and not request.use_playwright:
+    if request.fetch_live:
         try:
-            final_url, status, fetched_html, redirect_chain = safe_fetch_html(clean_url)
+            final_url, status, fetched_html, redirect_chain = await asyncio.to_thread(safe_fetch_html, clean_url)
             clean_url = final_url
             if status < 400:
                 html = fetched_html
@@ -286,12 +312,12 @@ async def analyze_url(request: AnalyzeURLRequest):
         except Exception as e:
             logger.info(f"Live fetch skipped for {clean_url}: {e}")
 
-    res = predictor.assess_website(
+    res = await asyncio.to_thread(
+        predictor.assess_website,
         url=clean_url,
         html=html,
         redirect_chain=redirect_chain,
         deep_scan=request.deep_scan,
-        use_playwright=request.use_playwright,
     )
     _record_scan_stat(res["overall_risk_level"])
     return _build_assessment_response(res)
@@ -305,8 +331,9 @@ async def analyze_dom(request: AnalyzeDOMRequest):
     if not request.html and not request.dom_features:
         raise HTTPException(status_code=400, detail="Provide either 'html' or 'dom_features'.")
 
-    dom_dict = request.dom_features.model_dump() if request.dom_features else None
-    res = predictor.assess_website(
+    dom_dict = request.dom_features.model_dump(exclude_unset=True) if request.dom_features is not None else None
+    res = await asyncio.to_thread(
+        predictor.assess_website,
         url=request.url,
         dom_features=dom_dict,
         html=request.html,
@@ -325,15 +352,15 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
     clean_url = _normalize_input_url(request.url)
 
     try:
-        validate_safe_url(clean_url, resolve_dns=request.fetch_live)
+        await asyncio.to_thread(validate_safe_url, clean_url, request.fetch_live)
     except SSRFBlockedError as se:
         raise HTTPException(status_code=400, detail=f"URL rejected by SSRF guard: {se}")
 
     html = request.html
     redirect_chain = list(request.redirect_chain or [])
-    if request.fetch_live and not html and not request.use_playwright:
+    if request.fetch_live and not html:
         try:
-            final_url, status, fetched_html, fetched_chain = safe_fetch_html(clean_url)
+            final_url, status, fetched_html, fetched_chain = await asyncio.to_thread(safe_fetch_html, clean_url)
             clean_url = final_url
             redirect_chain = fetched_chain
             if status < 400:
@@ -345,14 +372,14 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
         except Exception as e:
             logger.info(f"Live fetch skipped for {clean_url}: {e}")
 
-    dom_dict = request.dom_features.model_dump() if request.dom_features else None
-    res = predictor.assess_website(
+    dom_dict = request.dom_features.model_dump(exclude_unset=True) if request.dom_features is not None else None
+    res = await asyncio.to_thread(
+        predictor.assess_website,
         url=clean_url,
         dom_features=dom_dict,
         html=html,
         redirect_chain=redirect_chain,
         deep_scan=request.deep_scan,
-        use_playwright=request.use_playwright,
     )
     _record_scan_stat(res["overall_risk_level"])
     return _build_assessment_response(res)
@@ -365,90 +392,104 @@ async def scan_post(request: AnalyzeURLRequest):
         url=request.url,
         fetch_live=True,
         deep_scan=request.deep_scan,
-        use_playwright=request.use_playwright,
     )
     return await analyze_url(req)
 
 
 @app.get("/scan", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
-async def scan_get(url: str, deep_scan: bool = True, use_playwright: bool = False):
+async def scan_get(url: str, deep_scan: bool = True):
     """SSRF-safe live URL scan (GET convenience endpoint)."""
-    return await analyze_url(AnalyzeURLRequest(url=url, fetch_live=True, deep_scan=deep_scan, use_playwright=use_playwright))
+    return await analyze_url(AnalyzeURLRequest(url=url, fetch_live=True, deep_scan=deep_scan))
+
+
+def _compute_explain_sync(request: ExplainRequest) -> dict:
+    attributions = []
+    if predictor is not None and predictor.is_ready() and request.url:
+        if predictor.url_model_ready() and "url_length" in predictor._url_features:
+            df_u = predictor.prepare_url_dataframe(request.url)
+            attributions.extend(compute_shap_attributions(predictor._url_model, df_u, top_k=3))
+        if predictor.dom_model_ready() and request.features:
+            df_d = predictor.prepare_dom_dataframe(request.features, url=request.url)
+            attributions.extend(compute_shap_attributions(predictor._dom_model, df_d, top_k=3))
+
+    return generate_explanation(
+        url=request.url,
+        hostname=request.hostname or (urlparse(request.url).hostname or ""),
+        is_phishing=bool(request.is_phishing),
+        risk_level=request.risk_level or "HIGH",
+        phishing_prob=request.phishing_probability,
+        features_dict=request.features or {},
+        api_key=request.groq_api_key,
+        assessment=request.assessment,
+        attributions=attributions,
+        heuristic_risk_index=request.heuristic_risk_index,
+    )
 
 
 @app.post("/explain", response_model=ExplainResponse, tags=["Explainable AI"])
 async def explain(request: ExplainRequest):
     """Generate calibrated SHAP/feature-attribution + rule + optional Groq XAI breakdown."""
     try:
-        attributions = []
-        if predictor is not None and predictor.is_ready() and request.url:
-            if predictor.url_model_ready() and "url_length" in predictor._url_features:
-                df_u = predictor.prepare_url_dataframe(request.url)
-                attributions.extend(compute_shap_attributions(predictor._url_model, df_u, top_k=3))
-            if predictor.dom_model_ready() and request.features:
-                df_d = predictor.prepare_dom_dataframe(request.features, url=request.url)
-                attributions.extend(compute_shap_attributions(predictor._dom_model, df_d, top_k=3))
-
-        exp = generate_explanation(
-            url=request.url,
-            hostname=request.hostname or (urlparse(request.url).hostname or ""),
-            is_phishing=bool(request.is_phishing),
-            risk_level=request.risk_level or "HIGH",
-            phishing_prob=request.phishing_probability,
-            features_dict=request.features or {},
-            api_key=request.groq_api_key,
-            assessment=request.assessment,
-            attributions=attributions,
-            heuristic_risk_index=request.heuristic_risk_index,
-        )
+        exp = await asyncio.to_thread(_compute_explain_sync, request)
         return ExplainResponse(**exp)
     except Exception as e:
         logger.error(f"/explain error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Explanation generation failed.")
 
 
+def _write_feedback_record_sync(record: dict):
+    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
+    with _feedback_lock:
+        with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+
+def _read_feedback_summary_sync() -> dict:
+    counts: Counter = Counter()
+    total = 0
+    if os.path.exists(FEEDBACK_FILE):
+        with _feedback_lock:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        item = json.loads(line)
+                        counts[item.get("report_type", "unknown")] += 1
+                        total += 1
+    return {"total_reports": total, "by_type": dict(counts)}
+
+
 @app.post("/feedback", response_model=FeedbackResponse, tags=["Feedback & Monitoring"])
 async def submit_feedback(request: FeedbackRequest):
     """
     Store user-submitted false positive or missed threat reports in a human-review queue.
-    Unverified reports are NEVER automatically promoted into training datasets.
+    Strips sensitive query parameter values before persisting.
     """
-    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
-    parsed = urlparse(request.url.strip())
+    sanitized_url = redact_url_query_params(request.url.strip())[:2048]
+    parsed = urlparse(sanitized_url)
     record = {
         "report_id": str(uuid.uuid4()),
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "domain": (parsed.hostname or "").lower(),
-        "url": request.url.strip()[:2048],
+        "url": sanitized_url,
         "report_type": request.report_type,
         "reported_risk_level": request.reported_risk_level,
         "expected_category": request.expected_category,
         "notes": (request.notes or "").strip()[:1000],
         "verification_status": "pending_human_review",
     }
-    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    await asyncio.to_thread(_write_feedback_record_sync, record)
     return FeedbackResponse(
         status="recorded",
         report_id=record["report_id"],
         verification_status="pending_human_review",
-        message="Feedback logged for human verification before any dataset retraining.",
+        message="Feedback logged (with query secrets redacted) for human verification.",
     )
 
 
 @app.get("/feedback", tags=["Feedback & Monitoring"])
 async def list_feedback_summary():
     """Return aggregate feedback counts (avoids exposing raw user browsing URLs)."""
-    counts: Counter = Counter()
-    total = 0
-    if os.path.exists(FEEDBACK_FILE):
-        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    item = json.loads(line)
-                    counts[item.get("report_type", "unknown")] += 1
-                    total += 1
-    return {"total_reports": total, "by_type": dict(counts)}
+    return await asyncio.to_thread(_read_feedback_summary_sync)
 
 
 @app.get("/analytics", tags=["Feedback & Monitoring"])
@@ -481,7 +522,7 @@ async def get_analytics():
 async def list_unauthorized_sites(q: str = "", category: str = "", limit: int = 50):
     if predictor is None:
         raise HTTPException(status_code=503, detail="Backend is initializing.")
-    sites = predictor.intel.search_catalog(query=q, category=category, limit=limit)
+    sites = await asyncio.to_thread(predictor.intel.search_catalog, q, category, limit)
     return {"count": len(sites), "sites": sites}
 
 

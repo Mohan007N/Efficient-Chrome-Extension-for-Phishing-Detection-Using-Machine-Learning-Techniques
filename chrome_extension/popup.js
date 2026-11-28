@@ -82,8 +82,11 @@ $("settingsBtn")?.addEventListener("click", async () => {
 $("settingsCloseBtn")?.addEventListener("click", () => { $("settingsPanel").style.display = "none"; });
 
 async function refreshSettings() {
-  const data = await store.get(["api_base_url"]);
+  const data = await store.get(["api_base_url", "api_key"]);
   $("apiBaseInput").value = data.api_base_url || DEFAULT_API_BASE;
+  if ($("apiKeyInput")) {
+    $("apiKeyInput").value = data.api_key || "";
+  }
 }
 
 $("saveApiBtn")?.addEventListener("click", async () => {
@@ -95,6 +98,17 @@ $("saveApiBtn")?.addEventListener("click", async () => {
   await store.set({ api_base_url: val });
   $("apiSaveStatus").textContent = "Saved.";
   checkBackendHealth();
+});
+
+$("saveApiKeyBtn")?.addEventListener("click", async () => {
+  const keyVal = ($("apiKeyInput")?.value || "").trim();
+  if (keyVal) {
+    await store.set({ api_key: keyVal });
+    $("apiSaveStatus").textContent = "API key saved locally.";
+  } else {
+    await store.remove("api_key");
+    $("apiSaveStatus").textContent = "API key cleared.";
+  }
 });
 
 $("resetApiBtn")?.addEventListener("click", async () => {

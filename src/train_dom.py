@@ -97,6 +97,7 @@ def main():
     if os.path.exists(temp_path):
         temp_df = pd.read_csv(temp_path)
         if not temp_df.empty:
+            verify_domain_disjoint(train_df, val_df, temp_df, group_col="root_domain")
             X_temp, y_temp = _prepare_dom_xy(temp_df)
 
     # Phase 3.2 DOM candidate models (note class 0=Phishing positive ratio balanced cleanly)
@@ -154,7 +155,8 @@ def main():
             cv_phish_f1s.append(float(f1_score(y_train.iloc[va_i], pred_cv, pos_label=CLASS_PHISHING, zero_division=0)))
         cv_f1_mean = float(np.mean(cv_phish_f1s))
 
-        cal_model = CalibratedClassifierCV(estimator=clone(base_est), method="isotonic", cv=5)
+        cal_cv_splits = list(sgkf.split(X_train, y_train, groups=groups_train))
+        cal_model = CalibratedClassifierCV(estimator=clone(base_est), method="isotonic", cv=cal_cv_splits)
         if use_sw:
             cal_model.fit(X_train, y_train, sample_weight=compute_sample_weight("balanced", y_train))
         else:
@@ -271,7 +273,7 @@ def main():
         class_mapping=CLASS_MAPPING,
         threshold=best_threshold,
         calibrated=True,
-        training_config={"cv": "StratifiedGroupKFold(5)", "calibration": "isotonic(cv=5)", "threshold_rule": threshold_info["methodology"]},
+        training_config={"cv": "StratifiedGroupKFold(5)", "calibration": "domain_grouped_StratifiedGroupKFold(5)_isotonic", "threshold_rule": threshold_info["methodology"]},
         active_model_filename="dom_model.pkl",
         active_features_filename="dom_feature_columns.pkl",
     )

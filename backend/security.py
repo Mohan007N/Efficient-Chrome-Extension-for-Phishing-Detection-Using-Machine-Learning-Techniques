@@ -20,6 +20,7 @@ import http.client
 import ipaddress
 import logging
 import os
+import secrets
 import socket
 import ssl
 import threading
@@ -27,7 +28,7 @@ import time
 from typing import Callable
 import urllib.error
 import urllib.request
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 import zlib
 
 logger = logging.getLogger("PhishingAPI.Security")
@@ -434,6 +435,39 @@ def sanitize_telemetry_dict(payload: dict) -> dict:
         else:
             clean[k] = v
     return clean
+
+
+def redact_url_query_params(raw_url: str) -> str:
+    """
+    Remove query values and fragments before persisting URLs (feedback logs/analytics)
+    so tokens, OTPs, emails, and session IDs are never written to disk.
+    """
+    clean = (raw_url or "").strip()
+    if not clean:
+        return ""
+    parsed = urlparse(clean)
+    if parsed.query:
+        keys = [k for k, _ in parse_qsl(parsed.query, keep_blank_values=True)]
+        redacted_q = "&".join(f"{k}=REDACTED" for k in keys[:10])
+    else:
+        redacted_q = ""
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, redacted_q, ""))
+
+
+def check_api_key_authorized(headers) -> tuple[bool, bool]:
+    """
+    Verify optional `WEBSHIELD_API_KEY` protection against `X-API-Key` or `Authorization: Bearer`.
+    Returns `(auth_configured, is_authorized)`. When `WEBSHIELD_API_KEY` is blank, returns `(False, True)`.
+    """
+    expected = (os.getenv("WEBSHIELD_API_KEY") or "").strip()
+    if not expected:
+        return False, True
+    provided = (headers.get("x-api-key") or headers.get("X-API-Key") or "").strip()
+    if not provided:
+        auth_hdr = (headers.get("authorization") or headers.get("Authorization") or "").strip()
+        if auth_hdr.lower().startswith("bearer "):
+            provided = auth_hdr[7:].strip()
+    return True, bool(provided and secrets.compare_digest(provided, expected))
 
 
 def get_allowed_cors_origins() -> list[str]:

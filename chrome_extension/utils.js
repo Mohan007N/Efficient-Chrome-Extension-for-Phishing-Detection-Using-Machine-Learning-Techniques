@@ -23,6 +23,201 @@
       .replace(/'/g, "&#39;");
   }
 
+  const PROTECTED_BRAND_DOMAINS = {
+    amazon: ["amazon.com", "amazon.in", "amazon.co.uk", "amazon.de", "amazon.ca", "amazon.jp", "amazonaws.com"],
+    flipkart: ["flipkart.com"],
+    myntra: ["myntra.com"],
+    meesho: ["meesho.com"],
+    nykaa: ["nykaa.com"],
+    tatacliq: ["tatacliq.com"],
+    jiomart: ["jiomart.com"],
+    snapdeal: ["snapdeal.com"],
+    croma: ["croma.com"],
+    vijaysales: ["vijaysales.com"],
+    bigbasket: ["bigbasket.com"],
+    blinkit: ["blinkit.com"],
+    zepto: ["zeptonow.com", "zepto.com"],
+    swiggy: ["swiggy.com"],
+    zomato: ["zomato.com"],
+    makemytrip: ["makemytrip.com"],
+    goibibo: ["goibibo.com"],
+    cleartrip: ["cleartrip.com"],
+    irctc: ["irctc.co.in", "irctc.com"],
+    bookmyshow: ["bookmyshow.com"],
+    redbus: ["redbus.in"],
+    paytm: ["paytm.com"],
+    phonepe: ["phonepe.com"],
+    razorpay: ["razorpay.com"],
+    googlepay: ["pay.google.com", "gpay.app"],
+    paypal: ["paypal.com"],
+    hdfcbank: ["hdfcbank.com"],
+    icicibank: ["icicibank.com"],
+    axisbank: ["axisbank.com"],
+    onlinesbi: ["onlinesbi.sbi", "sbi.co.in"],
+    delhivery: ["delhivery.com"],
+    bluedart: ["bluedart.com"],
+    indiapost: ["indiapost.gov.in"],
+    apple: ["apple.com", "icloud.com"],
+    samsung: ["samsung.com"],
+    netflix: ["netflix.com"],
+    microsoft: ["microsoft.com", "live.com", "outlook.com", "office.com", "microsoftonline.com"],
+    google: ["google.com", "google.co.in", "accounts.google.com"],
+    facebook: ["facebook.com", "fb.com", "meta.com"],
+    instagram: ["instagram.com"],
+    whatsapp: ["whatsapp.com", "whatsapp.net"],
+    telegram: ["telegram.org", "t.me"],
+    binance: ["binance.com"],
+    coinbase: ["coinbase.com"],
+    ebay: ["ebay.com"],
+    walmart: ["walmart.com"],
+    shopify: ["shopify.com"],
+    adidas: ["adidas.com", "adidas.co.in"],
+    nike: ["nike.com"],
+  };
+
+  const HOSTED_USER_CONTENT_SUBDOMAINS = new Set([
+    "sites.google.com",
+    "docs.google.com",
+    "drive.google.com",
+    "storage.googleapis.com",
+    "script.google.com",
+    "colab.research.google.com",
+    "firebasestorage.googleapis.com",
+  ]);
+
+  const COMPOUND_PUBLIC_SLDS = new Set([
+    "co", "com", "net", "org", "gov", "edu", "ac", "mil", "nom", "nic", "gen", "firm", "ind", "res",
+    "ltd", "plc", "me", "or", "ne", "go", "gr", "ed", "ad",
+  ]);
+
+  function extractRootDomain(hostname) {
+    let host = String(hostname || "").toLowerCase().trim().replace(/\.$/, "");
+    if (!host) return "";
+    if (host.includes(":") && !host.startsWith("[")) {
+      host = host.split(":", 1)[0];
+    }
+    const cleanIp = host.replace(/^\[|\]$/g, "");
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(cleanIp) || cleanIp.includes(":")) {
+      return cleanIp;
+    }
+    const clean = host.startsWith("www.") ? host.slice(4) : host;
+    const parts = clean.split(".").filter(Boolean);
+    if (parts.length >= 3 && COMPOUND_PUBLIC_SLDS.has(parts[parts.length - 2]) && parts[parts.length - 1].length <= 3) {
+      return parts.slice(-3).join(".");
+    }
+    return parts.length >= 2 ? parts.slice(-2).join(".") : clean;
+  }
+
+  function shannonEntropy(text) {
+    const s = String(text || "");
+    const n = s.length;
+    if (!n) return 0;
+    const counts = Object.create(null);
+    for (let i = 0; i < n; i++) {
+      const ch = s[i];
+      counts[ch] = (counts[ch] || 0) + 1;
+    }
+    let ent = 0;
+    for (const k in counts) {
+      const p = counts[k] / n;
+      ent -= p * Math.log2(p);
+    }
+    return Math.round(ent * 10000) / 10000;
+  }
+
+  function _deleet(s) {
+    return String(s || "").replace(/[013457]/g, (c) => ({ "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t" }[c] || c));
+  }
+
+  function _editDistanceLeq1(a, b) {
+    if (a === b) return true;
+    const la = a.length;
+    const lb = b.length;
+    if (Math.abs(la - lb) > 1) return false;
+    if (la === lb) {
+      let diff = 0;
+      for (let i = 0; i < la; i++) {
+        if (a[i] !== b[i] && ++diff > 1) return false;
+      }
+      return diff === 1;
+    }
+    const shorter = la < lb ? a : b;
+    const longer = la < lb ? b : a;
+    let i = 0;
+    let j = 0;
+    let edits = 0;
+    while (i < shorter.length && j < longer.length) {
+      if (shorter[i] !== longer[j]) {
+        if (++edits > 1) return false;
+        j++;
+      } else {
+        i++;
+        j++;
+      }
+    }
+    return true;
+  }
+
+  function detectBrandImpersonation(hostname, titleText = "") {
+    let host = String(hostname || "").toLowerCase().trim().replace(/\.$/, "");
+    if (!host) return { score: 0, matchedBrand: null, brandDomainMismatch: 0 };
+    if (host.includes(":") && !host.startsWith("[")) {
+      host = host.split(":", 1)[0];
+    }
+    const root = extractRootDomain(host);
+    if (!root) return { score: 0, matchedBrand: null, brandDomainMismatch: 0 };
+
+    const userHosted = HOSTED_USER_CONTENT_SUBDOMAINS.has(host);
+    const deleet = _deleet(host);
+    const labels = host.split(/[.\-_]+/).filter(Boolean);
+    const deleetLabels = deleet.split(/[.\-_]+/).filter(Boolean);
+    const primaryLabel = root.split(".")[0] || "";
+    const deleetPrimary = _deleet(primaryLabel);
+
+    let bestScore = 0;
+    let matchedBrand = null;
+
+    const isOfficialHost = (officialRoots) =>
+      !userHosted && officialRoots.some((off) => root === off || host.endsWith("." + off));
+
+    for (const [brand, officialRoots] of Object.entries(PROTECTED_BRAND_DOMAINS)) {
+      if (isOfficialHost(officialRoots)) continue;
+      if (userHosted && brand === "google") continue;
+      if (host.includes(brand) || deleet.includes(brand)) {
+        const sc = labels.includes(brand) || deleetLabels.includes(brand) ? 0.95 : 0.85;
+        if (sc > bestScore) {
+          bestScore = sc;
+          matchedBrand = brand;
+        }
+      } else if (brand.length >= 6 && (_editDistanceLeq1(primaryLabel, brand) || _editDistanceLeq1(deleetPrimary, brand))) {
+        if (0.90 > bestScore) {
+          bestScore = 0.90;
+          matchedBrand = brand;
+        }
+      }
+    }
+
+    let brandDomainMismatch = bestScore >= 0.80 && matchedBrand ? 1 : 0;
+    if (!brandDomainMismatch && titleText) {
+      const titleClean = String(titleText).toLowerCase().replace(/[^a-z0-9 ]/g, " ");
+      if (/\b(login|sign\s*in|verify|account|official|checkout|support|kyc)\b/.test(titleClean)) {
+        for (const [brand, officialRoots] of Object.entries(PROTECTED_BRAND_DOMAINS)) {
+          if (brand.length >= 6 && titleClean.includes(brand) && !isOfficialHost(officialRoots)) {
+            brandDomainMismatch = 1;
+            if (!matchedBrand) matchedBrand = brand;
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      score: Math.round(bestScore * 10000) / 10000,
+      matchedBrand,
+      brandDomainMismatch,
+    };
+  }
+
   function isLocalNetworkHost(hostname) {
     const h = String(hostname || "").toLowerCase().trim().replace(/^\[|\]$/g, "").replace(/\.$/, "");
     if (!h) return false;
@@ -88,17 +283,27 @@
       Number(f.js_redirect_indicators || 0),
       Number(f.has_title || 0),
       Math.round(Number(f.domain_title_match_score || 0)),
+      Number(f.suspicious_login_indicators || 0),
+      Number(f.brand_domain_mismatch || 0),
       Number(f.mixed_content_count || 0),
       Number(f.is_https || 0),
     ].join("|");
     return `dom_${_fnv1aHex(vector)}`;
   }
 
-  function buildCacheKey({ url, domFeatures = null, modelVersion = "v3.0.0", cacheVersion = CACHE_SCHEMA_VERSION }) {
+  function buildCacheKey({
+    url,
+    domFeatures = null,
+    modelVersion = "v3.0.0",
+    cacheVersion = CACHE_SCHEMA_VERSION,
+    backendUrl = "",
+  }) {
     const normUrl = normalizeUrlForCache(url);
     const domFp = (domFeatures && domFeatures.dom_fingerprint) || computeDomFingerprint(domFeatures);
     const ver = String(modelVersion || "v3.0.0").replace(/[^a-zA-Z0-9._-]/g, "");
-    return `cache_${cacheVersion}::${ver}::${normUrl}::${domFp}`;
+    const normalizedBackend = String(backendUrl || "").trim().replace(/\/+$/, "").toLowerCase();
+    const backendTag = normalizedBackend ? _fnv1aHex(normalizedBackend) : "default";
+    return `cache_${cacheVersion}::${backendTag}::${ver}::${normUrl}::${domFp}`;
   }
 
   function isCacheEntryValid(entry, currentModelVersion, nowMs, ttlMs) {
@@ -153,8 +358,13 @@
 
   const api = {
     CACHE_SCHEMA_VERSION,
+    PROTECTED_BRAND_DOMAINS,
+    HOSTED_USER_CONTENT_SUBDOMAINS,
     escapeHtml,
     isLocalNetworkHost,
+    extractRootDomain,
+    shannonEntropy,
+    detectBrandImpersonation,
     normalizeUrlForCache,
     computeDomFingerprint,
     buildCacheKey,

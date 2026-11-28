@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy core backend, ML pipeline, versioned model artifacts, and lightweight runtime intel snapshots
-# Note: Raw training datasets (e.g. PhiUSIIL 71MB) are intentionally excluded; Chromium/Playwright is optional.
+# Raw training datasets (e.g. PhiUSIIL 71MB) are intentionally excluded.
 COPY backend/ ./backend/
 COPY src/ ./src/
 COPY models/ ./models/

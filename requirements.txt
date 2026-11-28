@@ -10,18 +10,18 @@ matplotlib>=3.7.0
 seaborn>=0.12.0
 pyarrow>=15.0.0
 
-# URL & HTML / Browser Intelligence
+# URL & HTML Parsing Intelligence
 tldextract>=5.1.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
-playwright>=1.45.0
 
-# Backend API & Security
+# Backend API, Security & Distributed Rate Limiting
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
 gunicorn>=21.2.0
+redis>=5.0.0
 
 # MLOps & Testing
 mlflow>=2.14.0

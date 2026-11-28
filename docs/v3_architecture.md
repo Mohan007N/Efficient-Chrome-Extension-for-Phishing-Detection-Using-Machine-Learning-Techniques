@@ -53,8 +53,7 @@ WebShield AI v3.0 separates **statistical machine learning probabilities** from 
 
 ## 4. Security & SSRF Controls
 
-- **Anti-DNS-Rebinding Fetcher (`backend/security.py`):** Resolves DNS once per HTTP hop, rejects private/loopback/link-local/multicast/reserved IPs, and pins TCP socket connection directly to the validated public IP via custom `HTTPConnection` / `HTTPSConnection` handlers while preserving strict TLS SNI and hostname verification.
+- **Anti-DNS-Rebinding Fetcher (`backend/security.py`):** Resolves DNS once per HTTP hop, rejects private/loopback/link-local/multicast/reserved IPs, and pins TCP socket connection directly to the validated public IP via custom `HTTPConnection` / `HTTPSConnection` handlers while preserving strict TLS SNI and hostname verification. Server-side optional live HTML inspection uses `safe_fetch_html()` + `lxml` static parsing (no headless browser dependency or JS execution), paired with live Chrome extension DOM extraction.
 - **Gzip-Bomb Protection (`safe_decompress_gzip`):** Decompresses incrementally via `zlib.decompressobj` with hard compressed (`1.5 MB`) and decompressed (`2.5 MB`) limits.
-- **SSRF-Guarded Playwright (`src/playwright_inspector.py`):** Optional rendered-DOM inspection attaches per-request/sub-request interception (`page.route`) blocking private IPs, `localhost`, `169.254.169.254`, and non-HTTP(S) schemes on every asset or redirect.
-- **Strict API Guardrails:** Configurable CORS (`STRICT_CORS=1` strips wildcard `*`), request size ceiling (`2 MB`), sanitized validation/exception responses (zero stack trace leakage), and idle-evicting / optional Redis-backed sliding-window rate limiting.
+- **Strict API Guardrails:** Configurable CORS (`STRICT_CORS=1` strips wildcard `*`), streaming request body cap (`2 MB` enforced across chunked & fixed requests), optional constant-time `WEBSHIELD_API_KEY` authentication (`X-API-Key` / `Authorization: Bearer`), query-parameter redaction before persisting `/feedback` logs, sanitized validation/exception responses (zero stack trace leakage), and idle-evicting / optional Redis-backed sliding-window rate limiting.
 

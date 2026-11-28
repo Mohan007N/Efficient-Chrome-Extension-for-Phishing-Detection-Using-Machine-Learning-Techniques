@@ -42,6 +42,11 @@
         <input type="url" id="apiBaseInput" class="key-input" placeholder="https://api.example.com or http://127.0.0.1:8000" />
         <button class="btn-save-key" id="saveApiBtn">Save</button>
       </div>
+      <label class="field-label" for="apiKeyInput" style="margin-top:8px">Optional API Key (<code>X-API-Key</code>)</label>
+      <div class="key-field-wrap">
+        <input type="password" id="apiKeyInput" class="key-input" placeholder="Optional if WEBSHIELD_API_KEY is set on server" autocomplete="off" />
+        <button class="btn-save-key" id="saveApiKeyBtn">Save Key</button>
+      </div>
       <div class="settings-footer">
         <span class="status-note" id="apiSaveStatus"></span>
         <button class="btn-link" id="resetApiBtn">Reset to Localhost</button>

@@ -164,7 +164,7 @@ def test_model_registry_integrity_tampering_and_rollback():
         manifest = get_active_registry_manifest(tmp_dir)
         assert manifest["models"]["url_risk"]["version"] == "v3.0.2"
 
-        # Tamper with active artifact and confirm SHA-256 verification fails
+        # Tamper with active model AND with feature columns; SHA-256 check must catch both
         active_file = os.path.join(tmp_dir, "url_model.pkl")
         with open(active_file, "ab") as f:
             f.write(b"TAMPER")
@@ -175,5 +175,50 @@ def test_model_registry_integrity_tampering_and_rollback():
         assert get_active_registry_manifest(tmp_dir)["models"]["url_risk"]["version"] == "v3.0.1"
         ok_rb, msg_rb = verify_active_model_integrity("url_risk", models_dir=tmp_dir)
         assert ok_rb, msg_rb
+
+        feat_file = os.path.join(tmp_dir, "url_feature_columns.pkl")
+        with open(feat_file, "ab") as f:
+            f.write(b"TAMPER_FEAT")
+        ok_feat_bad, feat_msg = verify_active_model_integrity("url_risk", models_dir=tmp_dir)
+        assert not ok_feat_bad
+        assert "feature_columns" in feat_msg
+
+        # Promotion gate must evaluate validation_metrics ONLY (never test_metrics)
+        res_val_fail = register_model_bundle(
+            model_role="url_risk",
+            version="v3.0.3",
+            model_obj=m1,
+            feature_columns=["f0"],
+            validation_metrics={"Phishing F1": 0.60, "ROC AUC": 0.70, "FPR": 0.20},
+            test_metrics=good_metrics,
+            model_name="LogReg",
+            dataset_lineage={"total_rows": 4, "sources": {"synthetic": 4}},
+            threshold=0.50,
+            calibrated=True,
+            active_model_filename="url_model.pkl",
+            active_features_filename="url_feature_columns.pkl",
+            models_dir=tmp_dir,
+        )
+        assert res_val_fail["promotion_passed"] is False
+        assert get_active_registry_manifest(tmp_dir)["models"]["url_risk"]["version"] == "v3.0.1"
+
+        res_val_gate = register_model_bundle(
+            model_role="url_risk",
+            version="v3.0.4",
+            model_obj=m2,
+            feature_columns=["f0"],
+            validation_metrics=good_metrics,
+            test_metrics={"Phishing F1": 0.65, "ROC AUC": 0.72, "FPR": 0.18},
+            model_name="LogReg",
+            dataset_lineage={"total_rows": 4, "sources": {"synthetic": 4}},
+            threshold=0.50,
+            calibrated=True,
+            active_model_filename="url_model.pkl",
+            active_features_filename="url_feature_columns.pkl",
+            models_dir=tmp_dir,
+        )
+        assert res_val_gate["promotion_passed"] is True
+        assert get_active_registry_manifest(tmp_dir)["models"]["url_risk"]["version"] == "v3.0.4"
+        assert any("Test audit note:" in n for n in res_val_gate["test_audit_notes"])
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -51,7 +51,8 @@ class DOMFeaturesPayload(BaseModel):
     has_copyright_notice: int = Field(default=0, ge=0, le=1)
     has_official_contact_cue: int = Field(default=0, ge=0, le=1)
 
-    is_https: int = Field(default=1, ge=0, le=1)
+    # Keep Optional so omitted DOM payload never asserts HTTPS=1 on HTTP pages
+    is_https: Optional[int] = Field(default=None, ge=0, le=1)
     mixed_content_count: int = Field(default=0, ge=0)
     cross_origin_iframes_uninspected: int = Field(default=0, ge=0)
     unavailable_signals: list[str] = Field(default_factory=list)
@@ -86,7 +87,7 @@ class URLFeaturesRequest(BaseModel):
     SpacialCharRatioInURL: float = Field(default=0.0, ge=0.0)
     CharContinuationRate: float = Field(default=0.0, ge=0.0)
 
-    IsHTTPS: int = Field(default=1, ge=0, le=1)
+    IsHTTPS: Optional[int] = Field(default=None, ge=0, le=1)
     LineOfCode: int = Field(default=0, ge=0)
     LargestLineLength: int = Field(default=0, ge=0)
     HasTitle: int = Field(default=0, ge=0, le=1)
@@ -148,9 +149,8 @@ class PredictionResponse(BaseModel):
 
 class AnalyzeURLRequest(BaseModel):
     url: str = Field(..., min_length=3, max_length=2048)
-    fetch_live: bool = Field(default=False, description="Optionally perform SSRF-safe backend HTML fetch")
+    fetch_live: bool = Field(default=False, description="Optionally perform SSRF-safe backend static HTML fetch")
     deep_scan: bool = Field(default=True, description="Include threat intel, RDAP, and TLS checks")
-    use_playwright: bool = Field(default=False, description="Optionally inspect rendered DOM via SSRF-guarded Playwright")
 
 
 class AnalyzeDOMRequest(BaseModel):
@@ -166,7 +166,6 @@ class AnalyzeWebsiteRequest(BaseModel):
     redirect_chain: list[str] = Field(default_factory=list)
     fetch_live: bool = Field(default=False)
     deep_scan: bool = Field(default=True)
-    use_playwright: bool = Field(default=False)
 
 
 class WebsiteAssessmentResponse(BaseModel):
@@ -182,6 +181,7 @@ class WebsiteAssessmentResponse(BaseModel):
     analysis_mode: str = "url_only"
     url_model_threat_probability: Optional[float] = None
     dom_model_threat_probability: Optional[float] = None
+    thresholds: dict[str, float] = Field(default_factory=dict)
     verdict: str
     whitelisted: bool = False
     dimensions: dict[str, Any] = Field(default_factory=dict)

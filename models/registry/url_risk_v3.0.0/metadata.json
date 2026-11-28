@@ -2,29 +2,29 @@
   "role": "url_risk",
   "version": "v3.0.0",
   "model_type": "CalibratedClassifierCV",
-  "algorithm": "LightGBM",
-  "created_at": "2026-11-28T07:54:59.812963+00:00",
-  "dataset_fingerprint": "7ccf1311750659354d141b77060d306538f091aafdfdcafd46e6c188ce42f5d1",
+  "algorithm": "XGBoost",
+  "created_at": "2026-11-28T12:10:35.212845+00:00",
+  "dataset_fingerprint": "d135275aab0cd9e2808c7232933efd14544f569795be24a1dfd365241ec5cd7a",
   "dataset_source_distribution": {
-    "phiusiil": 38878,
-    "phreshphish": 3970,
-    "openphish": 211,
-    "tranco_vetted": 50,
-    "custom_verified_fixture": 17
+    "phiusiil": 38884,
+    "phreshphish": 3939,
+    "openphish": 196,
+    "tranco_vetted": 44,
+    "custom_verified_fixture": 16
   },
   "dataset_lineage": {
-    "train_rows": 43126,
-    "val_rows": 9948,
-    "test_rows": 13247,
+    "train_rows": 43079,
+    "val_rows": 9954,
+    "test_rows": 13288,
     "sources": {
-      "phiusiil": 38878,
-      "phreshphish": 3970,
-      "openphish": 211,
-      "tranco_vetted": 50,
-      "custom_verified_fixture": 17
+      "phiusiil": 38884,
+      "phreshphish": 3939,
+      "openphish": 196,
+      "tranco_vetted": 44,
+      "custom_verified_fixture": 16
     },
     "split_strategy": "domain_grouped_GroupShuffleSplit_val_only_selection",
-    "dataset_fingerprint": "7ccf1311750659354d141b77060d306538f091aafdfdcafd46e6c188ce42f5d1"
+    "dataset_fingerprint": "d135275aab0cd9e2808c7232933efd14544f569795be24a1dfd365241ec5cd7a"
   },
   "feature_count": 33,
   "feature_columns": [
@@ -70,128 +70,128 @@
     0,
     1
   ],
-  "threshold": 0.6,
+  "threshold": 0.44,
   "calibrated": true,
   "validation_metrics": {
     "Positive Class": "0 (Phishing / Malicious)",
-    "Accuracy": 0.9668275030156815,
-    "Phishing Precision": 0.9779906256368454,
-    "Phishing Recall": 0.955785700059749,
-    "Phishing F1": 0.9667606768734891,
-    "Benign Precision": 0.9559611188256298,
-    "Benign Recall": 0.9780799675258778,
-    "Benign F1": 0.9668940609951846,
-    "Macro F1": 0.9668273689343369,
-    "Precision": 0.9779906256368454,
-    "Recall": 0.955785700059749,
-    "F1 Score": 0.9667606768734891,
-    "ROC AUC": 0.989029878043777,
-    "PR AUC": 0.9909814588144829,
-    "FPR": 0.021920032474122185,
-    "FNR": 0.044214299940250945,
+    "Accuracy": 0.9671488848704038,
+    "Phishing Precision": 0.9728346456692913,
+    "Phishing Recall": 0.9631650750341064,
+    "Phishing F1": 0.9679757124669474,
+    "Benign Precision": 0.9612228149363972,
+    "Benign Recall": 0.9713871034625752,
+    "Benign F1": 0.9662782303805301,
+    "Macro F1": 0.9671269714237387,
+    "Precision": 0.9728346456692913,
+    "Recall": 0.9631650750341064,
+    "F1 Score": 0.9679757124669474,
+    "ROC AUC": 0.9904656611742289,
+    "PR AUC": 0.9925802825311937,
+    "FPR": 0.02861289653742484,
+    "FNR": 0.036834924965893585,
     "Confusion Matrix": {
       "labels": [
         "0=Phishing",
         "1=Benign"
       ],
-      "tp_phishing": 4799,
-      "fn_phishing_as_benign": 222,
-      "fp_benign_as_phishing": 108,
-      "tn_benign": 4819,
+      "tp_phishing": 4942,
+      "fn_phishing_as_benign": 189,
+      "fp_benign_as_phishing": 138,
+      "tn_benign": 4685,
       "matrix": [
         [
-          4799,
-          222
+          4942,
+          189
         ],
         [
-          108,
-          4819
+          138,
+          4685
         ]
       ]
     },
-    "Threshold": 0.6
+    "Threshold": 0.44
   },
   "test_metrics": {
     "Positive Class": "0 (Phishing / Malicious)",
-    "Accuracy": 0.96753982033668,
-    "Phishing Precision": 0.9788089713843774,
-    "Phishing Recall": 0.9557468660323214,
-    "Phishing F1": 0.967140455448571,
-    "Benign Precision": 0.9567974048953111,
-    "Benign Recall": 0.9793238756414127,
-    "Benign F1": 0.9679295942720764,
-    "Macro F1": 0.9675350248603236,
-    "Precision": 0.9788089713843774,
-    "Recall": 0.9557468660323214,
-    "F1 Score": 0.967140455448571,
-    "ROC AUC": 0.9890634980312394,
-    "PR AUC": 0.9908753648154079,
-    "FPR": 0.020676124358587383,
-    "FNR": 0.0442531339676786,
+    "Accuracy": 0.9662101143889223,
+    "Phishing Precision": 0.9738760631834751,
+    "Phishing Recall": 0.9585887277619973,
+    "Phishing F1": 0.9661719279740827,
+    "Benign Precision": 0.95868138424821,
+    "Benign Recall": 0.9739354447643582,
+    "Benign F1": 0.9662482146884162,
+    "Macro F1": 0.9662100713312494,
+    "Precision": 0.9738760631834751,
+    "Recall": 0.9585887277619973,
+    "F1 Score": 0.9661719279740827,
+    "ROC AUC": 0.9900510211536919,
+    "PR AUC": 0.9925761764505405,
+    "FPR": 0.026064555235641763,
+    "FNR": 0.04141127223800269,
     "Confusion Matrix": {
       "labels": [
         "0=Phishing",
         "1=Benign"
       ],
-      "tp_phishing": 6328,
-      "fn_phishing_as_benign": 293,
-      "fp_benign_as_phishing": 137,
-      "tn_benign": 6489,
+      "tp_phishing": 6412,
+      "fn_phishing_as_benign": 277,
+      "fp_benign_as_phishing": 172,
+      "tn_benign": 6427,
       "matrix": [
         [
-          6328,
-          293
+          6412,
+          277
         ],
         [
-          137,
-          6489
+          172,
+          6427
         ]
       ]
     },
-    "Threshold": 0.6
+    "Threshold": 0.44
   },
   "metrics": {
     "Positive Class": "0 (Phishing / Malicious)",
-    "Accuracy": 0.96753982033668,
-    "Phishing Precision": 0.9788089713843774,
-    "Phishing Recall": 0.9557468660323214,
-    "Phishing F1": 0.967140455448571,
-    "Benign Precision": 0.9567974048953111,
-    "Benign Recall": 0.9793238756414127,
-    "Benign F1": 0.9679295942720764,
-    "Macro F1": 0.9675350248603236,
-    "Precision": 0.9788089713843774,
-    "Recall": 0.9557468660323214,
-    "F1 Score": 0.967140455448571,
-    "ROC AUC": 0.9890634980312394,
-    "PR AUC": 0.9908753648154079,
-    "FPR": 0.020676124358587383,
-    "FNR": 0.0442531339676786,
+    "Accuracy": 0.9662101143889223,
+    "Phishing Precision": 0.9738760631834751,
+    "Phishing Recall": 0.9585887277619973,
+    "Phishing F1": 0.9661719279740827,
+    "Benign Precision": 0.95868138424821,
+    "Benign Recall": 0.9739354447643582,
+    "Benign F1": 0.9662482146884162,
+    "Macro F1": 0.9662100713312494,
+    "Precision": 0.9738760631834751,
+    "Recall": 0.9585887277619973,
+    "F1 Score": 0.9661719279740827,
+    "ROC AUC": 0.9900510211536919,
+    "PR AUC": 0.9925761764505405,
+    "FPR": 0.026064555235641763,
+    "FNR": 0.04141127223800269,
     "Confusion Matrix": {
       "labels": [
         "0=Phishing",
         "1=Benign"
       ],
-      "tp_phishing": 6328,
-      "fn_phishing_as_benign": 293,
-      "fp_benign_as_phishing": 137,
-      "tn_benign": 6489,
+      "tp_phishing": 6412,
+      "fn_phishing_as_benign": 277,
+      "fp_benign_as_phishing": 172,
+      "tn_benign": 6427,
       "matrix": [
         [
-          6328,
-          293
+          6412,
+          277
         ],
         [
-          137,
-          6489
+          172,
+          6427
         ]
       ]
     },
-    "Threshold": 0.6
+    "Threshold": 0.44
   },
   "training_config": {
     "cv": "StratifiedGroupKFold(3)",
-    "calibration": "sigmoid(cv=3)",
+    "calibration": "domain_grouped_StratifiedGroupKFold(3)_sigmoid",
     "threshold_rule": "validation_grid_search_pos_class=0(min_recall>=0.92, max_fpr<=0.06)"
   },
   "library_versions": {
@@ -206,9 +206,9 @@
     "python": "3.11.0"
   },
   "sha256_checksums": {
-    "model": "7dd56fc6d7813c53d57189dd1d4e583738347ac4a43faca5e65dfc69d36d3614",
+    "model": "31aecd9b8b089e9cd12b2970df48f0499c4d96111a6b80ddd6b5a515265dca03",
     "feature_columns": "39355be4fd10d1905cfa1a49b4e74fc0964e60a3dfb9243fe77ffedcecb13288",
-    "encoders": "a2ca0cc7b5259c709f5f0ed15283e1a3880d32474e6426855f904d57be393a0b"
+    "encoders": "dc1a7a402fc7bfb983e97fc023b18dab9df01f313dbee51a2581883d5139110a"
   },
   "active_filenames": {
     "model": "url_model.pkl",
@@ -217,6 +217,9 @@
   },
   "promotion_passed": true,
   "promotion_gate_notes": [
-    "All validation and held-out test security gates passed."
+    "All validation security gates passed."
+  ],
+  "test_audit_notes": [
+    "Test audit passed."
   ]
 }

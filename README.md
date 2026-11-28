@@ -46,11 +46,11 @@ with strict engineering guarantees:
           ▼ HTTP/HTTPS JSON (zero passwords/cookies/API keys stored or sent by extension)
 [Hardened FastAPI Backend v3.0.0 (backend/)]
  ├── security.py        -> IP-pinned HTTP/HTTPS connections (anti-DNS-rebinding), streamed gzip-bomb cap,
- │                         bounded outbound fetch Semaphore, strict CORS, idle-evicting/Redis RateLimiter
- ├── main.py            -> Lifespan model + SHA-256 verification, degraded-aware /health, sanitized 422/500
- ├── predictor.py       -> Validates SHA-256 checksums & model.classes_; optional Playwright SSRF route scan
- ├── intel.py           -> Feed freshness TTL, reliability ratings, degraded error reporting, memory catalog cache
- ├── risk_engine.py     -> Multi-dimension fusion -> LOW / MEDIUM / HIGH / CRITICAL / UNKNOWN + operational_status
+ │                         bounded outbound fetch Semaphore, strict CORS, optional API key, idle-evicting/Redis RateLimiter
+ ├── main.py            -> Lifespan model + SHA-256 verification, async thread offload, streaming 2MB body cap, PII redaction
+ ├── predictor.py       -> Validates full SHA-256 artifact checksums, model.classes_, calibrated thresholds & SSRF static fetch
+ ├── intel.py           -> Separated domain vs URL cache, feed freshness TTL, reliability ratings, degraded error reporting
+ ├── risk_engine.py     -> Calibrated threshold fusion -> LOW / MEDIUM / HIGH / CRITICAL / UNKNOWN + operational_status
  └── explainer.py       -> Calibrated-unwrapped SHAP TreeExplainer + deterministic rules + optional Groq XAI
 ```
 
@@ -81,13 +81,12 @@ Architecture details: [`docs/v3_architecture.md`](docs/v3_architecture.md)
 │   ├── dataset_validation.py  # PSL domain-grouped splits, conflict priority, 18-category audit report
 │   ├── features.py            # Model 1 (33 PSL-aligned URL features) + Model 3 (Brand impersonation)
 │   ├── dom_features.py        # Model 2 (36 DOM features, single-pass lxml) + Model 4 (Credential/payment risk)
-│   ├── playwright_inspector.py# Optional SSRF-guarded Playwright browser DOM inspector
 │   ├── web_forensics.py       # SSRF-routed storefront/TLS/RDAP forensics
-│   ├── model_registry.py      # Atomic os.replace() model promotion, SHA-256 verification & rollback
+│   ├── model_registry.py      # Atomic os.replace() model promotion, multi-artifact SHA-256 verification & rollback
 │   ├── train.py / train_dom.py# Leak-free CV selection, calibration, validation thresholding & MLflow logging
 │   ├── evaluate.py            # Explicit Phishing (0) & Benign (1) metrics, ROC/PR-AUC, FPR/FNR
 │   └── predict.py             # CLI smoke runner
-├── tests/                     # 38 automated pytest tests (URL, DOM, risk, ML pipeline, security, API, extension)
+├── tests/                     # 43 automated pytest tests (URL, DOM, risk, ML pipeline, security, API, extension)
 ├── docs/                      # Architecture, Dataset, Model, API, Extension, Deployment & Privacy docs
 ├── reports/                   # v3 audit, dataset quality, model evaluation, security & test reports + CSVs
 ├── Dockerfile                 # FastAPI container bundling models & runtime intel snapshots
@@ -101,11 +100,11 @@ Architecture details: [`docs/v3_architecture.md`](docs/v3_architecture.md)
 
 Source: [`reports/v3_dataset_quality_report.md`](reports/v3_dataset_quality_report.md)
 
-- **URL Corpus (`data/processed/url_dataset.csv`):** `66,321` verified URLs across `64,359` unique PSL `root_domain`s (`33,242` Phishing `0` / `33,079` Benign `1`, `0` missing cells, `0` conflicts):
+- **URL Corpus (`data/processed/url_dataset.csv`):** `66,321` verified URLs across `64,374` unique PSL `root_domain`s (`33,242` Phishing `0` / `33,079` Benign `1`, `0` missing cells, `0` conflicts):
   - `phiusiil`: `59,930` | `phreshphish`: `5,995` | `openphish`: `300` | `tranco_vetted`: `78` | `custom_verified_fixture`: `18`
-  - Domain-disjoint splits (`verify_domain_disjoint` = PASS): Train `43,126` | Val `9,948` | Held-Out Test `13,247`
-- **DOM Corpus (`data/processed/dom_dataset.csv`):** `6,015` verified HTML documents across `5,520` unique PSL `root_domain`s (`3,009` Phishing `0` / `3,006` Benign `1`, parsed statically without executing JS):
-  - Domain-disjoint splits: Train `3,913` | Val `893` | Held-Out Test `1,209` + Chronological Temporal Test `1,500`
+  - Domain-disjoint splits (`verify_domain_disjoint` = PASS): Train `43,079` | Val `9,954` | Held-Out Test `13,288`
+- **DOM Corpus (`data/processed/dom_dataset.csv`):** `6,015` verified HTML documents across `5,534` unique PSL `root_domain`s (`3,009` Phishing `0` / `3,006` Benign `1`, parsed statically without executing JS):
+  - Domain-disjoint splits: Train `3,128` | Val `730` | Held-Out Test `968` + Domain-Disjoint Chronological Temporal Test `1,080`
 - **Quarantined Non-Binary Samples:** `520` unvetted Tranco candidates (`uncertain_samples.csv`) and `2` firewall/unreachable samples (`operational_status_samples.csv`) excluded from binary ML training.
 
 ---
@@ -114,13 +113,13 @@ Source: [`reports/v3_dataset_quality_report.md`](reports/v3_dataset_quality_repo
 
 Detailed evaluation tables: [`reports/v3_model_evaluation_report.md`](reports/v3_model_evaluation_report.md)
 
-- **Model 1 — URL Risk Classifier (`url_risk`, `LightGBM` + `CalibratedClassifierCV(sigmoid, cv=3)`, threshold = `0.60`):**
-  - Untouched Held-Out Test (`n = 13,247`): Accuracy `0.9675` | Phishing Precision `0.9788` | Phishing Recall `0.9557` | **Phishing F1 `0.9671`** | Benign F1 `0.9679` | **ROC AUC `0.9891`** | **PR AUC `0.9909`** | **FPR `0.0207`** | FNR `0.0443`
-- **Model 2 — DOM Behaviour Classifier (`dom_behavior`, `DOM LightGBM` + `CalibratedClassifierCV(isotonic, cv=5)`, threshold = `0.67`):**
-  - Untouched Held-Out Test (`n = 1,209`): Accuracy `0.8685` | Phishing Precision `0.9193` | Phishing Recall `0.7983` | **Phishing F1 `0.8545`** | Benign F1 `0.8800` | **ROC AUC `0.9383`** | **PR AUC `0.9418`** | **FPR `0.0657`** | FNR `0.2017`
-  - Chronological Temporal Split (`n = 1,500`): Accuracy `0.8860` | ROC AUC `0.9585` | PR AUC `0.9300` | FPR `0.0319`
+- **Model 1 — URL Risk Classifier (`url_risk`, `XGBoost` + `CalibratedClassifierCV(sigmoid, domain-grouped cv=3)`, threshold = `0.44`):**
+  - Untouched Held-Out Test (`n = 13,288`): Accuracy `0.9662` | Phishing Precision `0.9739` | Phishing Recall `0.9586` | **Phishing F1 `0.9662`** | Benign F1 `0.9662` | **ROC AUC `0.9901`** | **PR AUC `0.9926`** | **FPR `0.0261`** | FNR `0.0414`
+- **Model 2 — DOM Behaviour Classifier (`dom_behavior`, `DOM XGBoost` + `CalibratedClassifierCV(isotonic, domain-grouped cv=5)`, threshold = `0.65`):**
+  - Untouched Held-Out Test (`n = 968`): Accuracy `0.8729` | Phishing Precision `0.9112` | Phishing Recall `0.8418` | **Phishing F1 `0.8751`** | Benign F1 `0.8707` | **ROC AUC `0.9412`** | **PR AUC `0.9422`** | FPR `0.0921` | FNR `0.1582` (Val FPR `0.0673`)
+  - Domain-Disjoint Temporal Split (`n = 1,080`): Accuracy `0.7565` | ROC AUC `0.8481` | PR AUC `0.8024` | FPR `0.0849`
 
-Both bundles passed all promotion gates (`Phishing F1 >= 0.85`, `ROC AUC >= 0.90`, `FPR <= 0.08`) and are registered with SHA-256 verification in [`models/registry/active_manifest.json`](models/registry/active_manifest.json).
+Both bundles passed validation-only promotion gates (`Phishing F1 >= 0.85`, `ROC AUC >= 0.90`, `FPR <= 0.08`) and are registered with full SHA-256 verification in [`models/registry/active_manifest.json`](models/registry/active_manifest.json).
 
 ---
 
@@ -140,9 +139,9 @@ python run_train.py
 # 3. Start FastAPI backend
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-# 4. Run full v3.0 test suite (38 / 38 tests) & CLI smoke check
+# 4. Run full v3.0 test suite (43 / 43 tests) & CLI smoke check
 pytest -v tests/
 python src/predict.py
 ```
 
-Latest verified test & verification suite: **38 / 38 pytest tests passing** (`32` unit/DOM/risk/extension/ML/security tests + `6` FastAPI endpoint/SSRF tests), `python src/predict.py` exit `0`, and `node --check` on all extension scripts. Full reports: [`reports/v3_test_report.md`](reports/v3_test_report.md) | [`reports/v3_security_report.md`](reports/v3_security_report.md)
+Latest verified test & verification suite: **43 / 43 pytest tests passing** (`36` unit/DOM/risk/extension/ML/security tests + `7` FastAPI endpoint/SSRF/auth tests), `python src/predict.py` exit `0`, Playwright completely removed, and `node --check` on all extension scripts. Full reports: [`reports/v3_test_report.md`](reports/v3_test_report.md) | [`reports/v3_security_report.md`](reports/v3_security_report.md)

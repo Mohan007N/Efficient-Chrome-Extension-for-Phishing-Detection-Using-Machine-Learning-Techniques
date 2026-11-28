@@ -1,4 +1,5 @@
 import gzip
+import importlib.util
 import os
 import shutil
 import socket
@@ -9,17 +10,19 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import backend.intel as intel_mod
 from backend.intel import UnauthorizedIntelEngine
 from backend.security import (
     PayloadTooLargeError,
     RateLimiter,
     SSRFBlockedError,
+    check_api_key_authorized,
     get_allowed_cors_origins,
+    redact_url_query_params,
     safe_decompress_gzip,
     sanitize_telemetry_dict,
     validate_safe_url_and_resolve,
 )
-from src.playwright_inspector import should_block_playwright_request
 
 
 def test_dns_rebinding_resolution_validation():
@@ -86,14 +89,56 @@ def test_cors_rate_limit_eviction_and_telemetry_sanitization(monkeypatch):
     assert sanitized["nested"]["safe_flag"] == 1
 
 
-def test_playwright_ssrf_request_filtering():
-    def fake_pub_dns(host, port, type=socket.SOCK_STREAM):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.190.46", port))]
+def test_playwright_completely_removed():
+    assert importlib.util.find_spec("src.playwright_inspector") is None
+    assert importlib.util.find_spec("playwright") is None
 
-    assert should_block_playwright_request("http://127.0.0.1:8000/admin", resolve_dns=False)[0] is True
-    assert should_block_playwright_request("http://169.254.169.254/latest/meta-data", resolve_dns=False)[0] is True
-    assert should_block_playwright_request("file:///etc/passwd", resolve_dns=False)[0] is True
-    assert should_block_playwright_request("https://sites.google.com/view/test", resolve_dns=True, dns_resolver=fake_pub_dns)[0] is False
+
+def test_url_query_redaction_and_constant_time_api_key(monkeypatch):
+    redacted = redact_url_query_params("https://shop.invalid/checkout?token=secret123&otp=9999#frag")
+    assert "secret123" not in redacted
+    assert "9999" not in redacted
+    assert "#frag" not in redacted
+    assert "token=REDACTED" in redacted and "otp=REDACTED" in redacted
+
+    monkeypatch.delenv("WEBSHIELD_API_KEY", raising=False)
+    assert check_api_key_authorized({}) == (False, True)
+
+    monkeypatch.setenv("WEBSHIELD_API_KEY", "top-secret-key")
+    assert check_api_key_authorized({}) == (True, False)
+    assert check_api_key_authorized({"X-API-Key": "wrong"}) == (True, False)
+    assert check_api_key_authorized({"X-API-Key": "top-secret-key"}) == (True, True)
+    assert check_api_key_authorized({"Authorization": "Bearer top-secret-key"}) == (True, True)
+
+
+def test_intel_separates_domain_and_page_forensics_caches(monkeypatch):
+    calls = {"rdap": 0, "tls": 0, "html": 0}
+
+    def fake_rdap(domain, timeout=2.5):
+        calls["rdap"] += 1
+        return {"domain_age_days": 1200, "created_date": "2022-01-01"}
+
+    def fake_tls(host, timeout=2.5):
+        calls["tls"] += 1
+        return {"ssl_error": False, "ssl_valid": True}
+
+    monkeypatch.setattr(intel_mod, "inspect_rdap_domain", fake_rdap)
+    monkeypatch.setattr(intel_mod, "inspect_tls_certificate", fake_tls)
+
+    engine = UnauthorizedIntelEngine()
+    engine.loaded = True
+    monkeypatch.setattr(
+        engine,
+        "_safe_fetch_and_forensics",
+        lambda url: calls.__setitem__("html", calls["html"] + 1) or {"fetched": True, "url": url},
+    )
+
+    r1 = engine.inspect_domain("https://multi-page.invalid/about", "multi-page.invalid", deep_scan=True)
+    r2 = engine.inspect_domain("https://multi-page.invalid/checkout", "multi-page.invalid", deep_scan=True)
+    assert calls["rdap"] == 1
+    assert calls["tls"] == 1
+    assert calls["html"] == 2
+    assert r1["forensics"]["url"] != r2["forensics"]["url"]
 
 
 def test_threat_intel_honest_failure_visibility_and_hosted_subdomain_protection():

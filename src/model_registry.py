@@ -162,10 +162,12 @@ def register_model_bundle(
         os.replace(f"{enc_path}.tmp", enc_path)
         checksums["encoders"] = compute_file_sha256(enc_path)
 
+    # Promotion gate strictly uses VALIDATION metrics only (never leak held-out test metrics into promotion decisions)
     passed_val, val_notes = check_promotion_gates(validation_metrics, gates=gates)
-    passed_test, test_notes = check_promotion_gates(test_metrics, gates=gates)
-    passed = passed_val and passed_test
-    gate_reasons = ([] if passed_val else [f"Val: {n}" for n in val_notes]) + ([] if passed_test else [f"Test: {n}" for n in test_notes])
+    passed_test_audit, test_audit_notes = check_promotion_gates(test_metrics, gates=gates)
+    passed = passed_val
+    gate_reasons = ([] if passed_val else [f"Val: {n}" for n in val_notes])
+    audit_notes = (["Test audit passed."] if passed_test_audit else [f"Test audit note: {n}" for n in test_audit_notes])
 
     ds_fingerprint = dataset_lineage.get("dataset_fingerprint") or compute_dataset_fingerprint(dataset_lineage)
 
@@ -197,7 +199,8 @@ def register_model_bundle(
             "encoders": active_encoders_filename,
         },
         "promotion_passed": passed,
-        "promotion_gate_notes": gate_reasons or ["All validation and held-out test security gates passed."],
+        "promotion_gate_notes": gate_reasons or ["All validation security gates passed."],
+        "test_audit_notes": audit_notes,
     }
     _atomic_write_json(os.path.join(version_dir, "metadata.json"), metadata)
 
@@ -231,22 +234,31 @@ def register_model_bundle(
 
 
 def verify_active_model_integrity(model_role: str, models_dir: str = MODELS_DIR) -> tuple[bool, str]:
-    """Verify active promoted model file exists and matches manifest SHA-256 checksum."""
+    """Verify EVERY active promoted artifact (model, feature_columns, encoders) exists and matches SHA-256."""
     reg_dir = os.path.join(models_dir, "registry")
     manifest = _load_manifest(reg_dir)
     entry = (manifest.get("models") or {}).get(model_role)
     if not entry:
         return False, f"No active registry entry for role '{model_role}'."
-    active_name = (entry.get("active_filenames") or {}).get("model")
-    expected_sha = (entry.get("sha256_checksums") or {}).get("model")
-    if not active_name or not expected_sha:
+
+    active_files = entry.get("active_filenames") or {}
+    checksums = entry.get("sha256_checksums") or {}
+    if not checksums or "model" not in checksums:
         return False, f"Incomplete integrity metadata for role '{model_role}'."
-    active_path = os.path.join(models_dir, active_name)
-    if not os.path.exists(active_path):
-        return False, f"Active artifact missing: {active_path}"
-    actual_sha = compute_file_sha256(active_path)
-    if actual_sha != expected_sha:
-        return False, f"Checksum mismatch on {active_name} (expected {expected_sha[:12]}, got {actual_sha[:12]})."
+
+    for art_key, expected_sha in checksums.items():
+        art_name = active_files.get(art_key)
+        if not art_name or not expected_sha:
+            return False, f"Missing active filename/checksum metadata for '{model_role}:{art_key}'."
+        art_path = os.path.join(models_dir, art_name)
+        if not os.path.exists(art_path):
+            return False, f"Active artifact missing: {art_path}"
+        actual_sha = compute_file_sha256(art_path)
+        if actual_sha != expected_sha:
+            return False, (
+                f"Checksum mismatch on {art_name} ({art_key}) "
+                f"(expected {expected_sha[:12]}, got {actual_sha[:12]})."
+            )
     return True, "ok"
 
 

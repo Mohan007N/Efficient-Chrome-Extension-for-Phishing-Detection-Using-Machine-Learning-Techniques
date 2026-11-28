@@ -153,8 +153,9 @@ def main():
             cv_phish_f1s.append(float(f1_score(y_train.iloc[va_i], pred_cv, pos_label=CLASS_PHISHING, zero_division=0)))
         cv_f1_mean = float(np.mean(cv_phish_f1s))
 
-        # Probability calibration performed strictly inside train split (`cv=3`) so validation remains untouched
-        cal_model = CalibratedClassifierCV(estimator=clone(base_est), method="sigmoid", cv=3)
+        # Probability calibration performed with domain-grouped folds inside train split so same domain never spans train & calibration
+        cal_cv_splits = list(sgkf.split(X_train, y_train, groups=groups_train))
+        cal_model = CalibratedClassifierCV(estimator=clone(base_est), method="sigmoid", cv=cal_cv_splits)
         cal_model.fit(X_train, y_train)
         train_time = time.time() - t0
 
@@ -264,7 +265,7 @@ def main():
         class_mapping=CLASS_MAPPING,
         threshold=best_threshold,
         calibrated=True,
-        training_config={"cv": "StratifiedGroupKFold(3)", "calibration": "sigmoid(cv=3)", "threshold_rule": threshold_info["methodology"]},
+        training_config={"cv": "StratifiedGroupKFold(3)", "calibration": "domain_grouped_StratifiedGroupKFold(3)_sigmoid", "threshold_rule": threshold_info["methodology"]},
         encoders={"tld": tld_encoder},
         active_model_filename="url_model.pkl",
         active_features_filename="url_feature_columns.pkl",

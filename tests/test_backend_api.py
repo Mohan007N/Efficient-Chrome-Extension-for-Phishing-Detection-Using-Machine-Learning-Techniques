@@ -1,9 +1,11 @@
+import json
 import os
 import sys
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import backend.main as main_mod
 from backend.main import app
 
 
@@ -148,3 +150,63 @@ def test_explain_and_feedback_endpoints():
         })
         assert fb.status_code == 200
         assert fb.json()["verification_status"] == "pending_human_review"
+
+
+def test_http_without_dom_scan_endpoints_auth_chunked_limit_and_feedback_redaction(monkeypatch, tmp_path):
+    fb_path = tmp_path / "feedback.jsonl"
+    monkeypatch.setattr(main_mod, "FEEDBACK_FILE", str(fb_path))
+
+    with TestClient(app) as client:
+        # http:// URL without DOM payload must preserve INSECURE_HTTP and mark dom_behavior unavailable
+        r_http = client.post("/analyze-url", json={
+            "url": "http://plain-http-fixture.invalid/login",
+            "fetch_live": False,
+            "deep_scan": False,
+        })
+        assert r_http.status_code == 200
+        b_http = r_http.json()
+        assert b_http["connection_security"] == "INSECURE_HTTP"
+        assert b_http["analysis_mode"] == "url_only"
+        assert "dom_behavior" in b_http["unavailable_signals"]
+        assert "thresholds" in b_http
+
+        # Empty dom_features={} via /predict does not count as valid DOM observation
+        r_empty_dom = client.post("/predict", json={
+            "url": "https://empty-dom-api.invalid/page",
+            "hostname": "empty-dom-api.invalid",
+            "dom_features": {},
+        })
+        assert r_empty_dom.status_code == 200
+        assert r_empty_dom.json()["assessment"]["analysis_mode"] == "url_only"
+
+        # /scan GET and POST work cleanly without Playwright
+        s_post = client.post("/scan", json={"url": "https://example.com/", "fetch_live": False, "deep_scan": False})
+        s_get = client.get("/scan", params={"url": "https://example.com/", "fetch_live": False, "deep_scan": False})
+        assert s_post.status_code == 200 and s_get.status_code == 200
+
+        # /feedback redacts sensitive query string values before persisting
+        fb = client.post("/feedback", json={
+            "url": "https://example.com/reset?token=super_secret_token&otp=123456",
+            "report_type": "missed_suspicious",
+            "notes": "Redaction check",
+        })
+        assert fb.status_code == 200
+        written = [json.loads(line) for line in fb_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert "super_secret_token" not in written[-1]["url"]
+        assert "123456" not in written[-1]["url"]
+        assert "token=REDACTED" in written[-1]["url"]
+
+        # Chunked streaming payload > 2 MB (no Content-Length header) is blocked with 413
+        oversized = client.post("/predict", content=(b"a" * 700_000 for _ in range(4)))
+        assert oversized.status_code == 413
+
+        # Optional WEBSHIELD_API_KEY gates prediction endpoints while keeping /health & /version public
+        monkeypatch.setenv("WEBSHIELD_API_KEY", "test-api-secret")
+        assert client.get("/health").status_code == 200
+        assert client.get("/version").status_code == 200
+        assert client.post("/analyze-url", json={"url": "https://example.com/", "fetch_live": False, "deep_scan": False}).status_code == 401
+        assert client.post(
+            "/analyze-url",
+            json={"url": "https://example.com/", "fetch_live": False, "deep_scan": False},
+            headers={"X-API-Key": "test-api-secret"},
+        ).status_code == 200

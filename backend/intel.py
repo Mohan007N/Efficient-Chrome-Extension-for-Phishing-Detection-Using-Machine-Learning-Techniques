@@ -30,6 +30,7 @@ from src.features import (
     detect_brand_impersonation,
     extract_root_domain,
     is_hosted_user_content_subdomain,
+    normalize_url,
 )
 from src.web_forensics import analyze_storefront_forensics, inspect_rdap_domain, inspect_tls_certificate
 
@@ -71,7 +72,8 @@ class UnauthorizedIntelEngine:
         self.jarelllama_scams: set[str] = set()
         self.tranco_ranks: dict[str, int] = {}
 
-        self._live_cache: dict[str, tuple[float, dict]] = {}
+        self._domain_meta_cache: dict[str, tuple[float, dict]] = {}
+        self._page_forensics_cache: dict[str, tuple[float, dict]] = {}
         self._cache_lock = threading.Lock()
         self._catalog_df: pd.DataFrame | None = None
 
@@ -358,44 +360,61 @@ class UnauthorizedIntelEngine:
             return result
 
         now = time.time()
-        cache_key = root or host
+        domain_key = host
+        target_url = normalize_url(url) if (url and url.startswith(("http://", "https://"))) else f"https://{host}/"
+        page_key = target_url
+
         with self._cache_lock:
-            cached = self._live_cache.get(cache_key)
-        if cached and (now - cached[0]) < self.cache_ttl_seconds:
-            live_data = cached[1]
+            cached_dom = self._domain_meta_cache.get(domain_key)
+            cached_page = self._page_forensics_cache.get(page_key)
+
+        dom_valid = cached_dom is not None and (now - cached_dom[0]) < self.cache_ttl_seconds
+        page_valid = cached_page is not None and (now - cached_page[0]) < self.cache_ttl_seconds
+
+        if dom_valid and page_valid:
+            domain_data = cached_dom[1]
+            forensics_info = cached_page[1]
         else:
-            target_url = url if (url and url.startswith(("http://", "https://"))) else f"https://{host}/"
             with ThreadPoolExecutor(max_workers=3) as pool:
-                fut_rdap = pool.submit(inspect_rdap_domain, host, 2.5)
-                fut_tls = pool.submit(inspect_tls_certificate, host, 2.5)
-                fut_html = pool.submit(self._safe_fetch_and_forensics, target_url)
-                rdap_info = fut_rdap.result()
-                tls_info = fut_tls.result()
-                forensics_info = fut_html.result()
+                fut_rdap = None if dom_valid else pool.submit(inspect_rdap_domain, root or host, 2.5)
+                fut_tls = None if dom_valid else pool.submit(inspect_tls_certificate, host, 2.5)
+                fut_html = None if page_valid else pool.submit(self._safe_fetch_and_forensics, target_url)
 
-            live_data = {"rdap": rdap_info, "tls": tls_info, "forensics": forensics_info}
+                domain_data = (
+                    cached_dom[1]
+                    if dom_valid
+                    else {"rdap": fut_rdap.result(), "tls": fut_tls.result()}
+                )
+                forensics_info = cached_page[1] if page_valid else fut_html.result()
+
             with self._cache_lock:
-                if len(self._live_cache) >= MAX_LIVE_CACHE_ENTRIES:
-                    oldest_key = min(self._live_cache.items(), key=lambda kv: kv[1][0])[0]
-                    del self._live_cache[oldest_key]
-                self._live_cache[cache_key] = (now, live_data)
+                if not dom_valid:
+                    if len(self._domain_meta_cache) >= MAX_LIVE_CACHE_ENTRIES:
+                        oldest_k = min(self._domain_meta_cache.items(), key=lambda kv: kv[1][0])[0]
+                        del self._domain_meta_cache[oldest_k]
+                    self._domain_meta_cache[domain_key] = (now, domain_data)
+                if not page_valid:
+                    if len(self._page_forensics_cache) >= MAX_LIVE_CACHE_ENTRIES:
+                        oldest_pk = min(self._page_forensics_cache.items(), key=lambda kv: kv[1][0])[0]
+                        del self._page_forensics_cache[oldest_pk]
+                    self._page_forensics_cache[page_key] = (now, forensics_info)
 
-        result["rdap"] = live_data["rdap"]
-        result["tls"] = live_data["tls"]
-        result["forensics"] = live_data["forensics"]
+        result["rdap"] = domain_data["rdap"]
+        result["tls"] = domain_data["tls"]
+        result["forensics"] = forensics_info
 
-        age_days = live_data["rdap"].get("domain_age_days")
+        age_days = domain_data["rdap"].get("domain_age_days")
         if age_days is not None and age_days < 90:
             result["indicators"].append(
-                f"Recently Registered Domain: Created {age_days} days ago ({live_data['rdap'].get('created_date')})."
+                f"Recently Registered Domain: Created {age_days} days ago ({domain_data['rdap'].get('created_date')})."
             )
 
-        if live_data["tls"].get("ssl_error"):
+        if domain_data["tls"].get("ssl_error"):
             result["indicators"].append(
-                f"TLS Certificate Verification Failure: {live_data['tls'].get('ssl_error_detail') or 'Invalid or untrusted certificate'}."
+                f"TLS Certificate Verification Failure: {domain_data['tls'].get('ssl_error_detail') or 'Invalid or untrusted certificate'}."
             )
 
-        for fl in live_data["forensics"].get("forensic_flags", []):
+        for fl in forensics_info.get("forensic_flags", []):
             if fl not in result["indicators"]:
                 result["indicators"].append(fl)
 

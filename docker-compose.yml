@@ -34,5 +34,5 @@ services:
     volumes:
       - ./mlruns:/app/mlruns
     command: >
-      sh -c "pip install --no-cache-dir mlflow>=2.14.0 &&
+      sh -c "pip install --no-cache-dir 'mlflow>=2.14.0' &&
              mlflow ui --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////app/mlruns/mlflow.db"

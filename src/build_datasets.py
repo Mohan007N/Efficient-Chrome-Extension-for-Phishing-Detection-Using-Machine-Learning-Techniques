@@ -36,6 +36,7 @@ from src.dataset_validation import (
     run_dataset_quality_audit,
     temporal_train_test_split,
     validate_dataset_schema,
+    verify_domain_disjoint,
 )
 from src.dom_features import DOM_FEATURE_COLUMNS, DOM_FEATURE_VERSION, compute_content_sha256, extract_dom_features_from_html
 from src.features import (
@@ -945,15 +946,22 @@ def build_all_datasets(
     validate_dataset_schema(dom_dataset, DOM_FEATURE_COLUMNS + ["url", "root_domain", "binary_label", "primary_label", "content_sha256"])
     dom_dataset.to_csv(os.path.join(PROCESSED_DIR, "dom_dataset.csv"), index=False)
 
-    dom_train, dom_val, dom_test = domain_grouped_train_val_test_split(dom_dataset, group_col="root_domain")
+    # Reserve chronological temporal test FIRST and exclude its root_domains from train/val/test to prevent ANY domain overlap
+    phresh_only_dom = dom_dataset[dom_dataset["source"] == "phreshphish"]
+    dom_core = dom_dataset
+    if len(phresh_only_dom) >= 40:
+        _, dom_temp_test = temporal_train_test_split(phresh_only_dom, date_col="date", test_fraction=0.18)
+        temp_domains = set(dom_temp_test["root_domain"].dropna().astype(str).str.lower())
+        dom_core = dom_dataset[~dom_dataset["root_domain"].astype(str).str.lower().isin(temp_domains)].reset_index(drop=True)
+        dom_temp_test.to_csv(os.path.join(PROCESSED_DIR, "dom_temporal_test.csv"), index=False)
+
+    dom_train, dom_val, dom_test = domain_grouped_train_val_test_split(dom_core, group_col="root_domain")
+    if len(phresh_only_dom) >= 40:
+        verify_domain_disjoint(dom_train, dom_val, dom_temp_test, group_col="root_domain")
+        verify_domain_disjoint(dom_train, dom_test, dom_temp_test, group_col="root_domain")
     dom_train.to_csv(os.path.join(PROCESSED_DIR, "dom_train.csv"), index=False)
     dom_val.to_csv(os.path.join(PROCESSED_DIR, "dom_val.csv"), index=False)
     dom_test.to_csv(os.path.join(PROCESSED_DIR, "dom_test.csv"), index=False)
-
-    phresh_only_dom = dom_dataset[dom_dataset["source"] == "phreshphish"]
-    if len(phresh_only_dom) >= 40:
-        _, dom_temp_test = temporal_train_test_split(phresh_only_dom, date_col="date", test_fraction=0.25)
-        dom_temp_test.to_csv(os.path.join(PROCESSED_DIR, "dom_temporal_test.csv"), index=False)
 
     # 3. Combine verified metadata -> resolve conflicts -> extract PSL URL features
     phresh_meta_df = pd.DataFrame(phresh_meta_rows)

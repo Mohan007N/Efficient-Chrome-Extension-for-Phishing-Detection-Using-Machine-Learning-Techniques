@@ -1,6 +1,6 @@
 # WebShield AI v3.0 — Dataset Quality & Validation Report
 
-**Generated At:** `2026-11-28T07:51:31.105824+00:00`
+**Generated At:** `2026-11-28T12:07:25.785068+00:00`
 
 ---
 
@@ -8,14 +8,14 @@
 
 | Dataset File | Verified Rows | Unique Root Domains | Phishing / Malicious (`0`) | Benign (`1`) | Non-Binary (`-1`) | Null Cells |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `data/processed/url_dataset.csv` | 66,321 | 64,359 | 33,242 | 33,079 | 0 | 0 |
-| `data/processed/dom_dataset.csv` | 6,015 | 5,520 | 3,009 | 3,006 | 0 | 0 |
+| `data/processed/url_dataset.csv` | 66,321 | 64,374 | 33,242 | 33,079 | 0 | 0 |
+| `data/processed/dom_dataset.csv` | 6,015 | 5,534 | 3,009 | 3,006 | 0 | 0 |
 | `data/processed/uncertain_samples.csv` | 520 | 520 | 0 | 0 | 520 | 0 |
 | `data/processed/operational_status_samples.csv` | 2 | 2 | 0 | 0 | 2 | 0 |
 
 ### Domain-Disjoint Splits (`verify_domain_disjoint` = PASS / 0 Overlap)
-- **URL Splits:** Train `43,126` (`41,833` domains) | Val `9,948` (`9,654` domains) | Test `13,247` (`12,872` domains)
-- **DOM Splits:** Train `3,913` (`3,588` domains) | Val `893` (`828` domains) | Test `1,209` (`1,104` domains)
+- **URL Splits:** Train `43,079` (`41,842` domains) | Val `9,954` (`9,657` domains) | Test `13,288` (`12,875` domains)
+- **DOM Splits:** Train `3,128` (`2,937` domains) | Val `730` (`678` domains) | Test `968` (`904` domains)
 
 ---
 
@@ -81,9 +81,9 @@
 | Feature | Mean | Median | Max | Outliers (`> 3xIQR`) |
 | --- | ---: | ---: | ---: | ---: |
 | `suspicious_link_ratio` | 0.0922 | 0.0 | 1.0 | 1,122 |
-| `external_link_ratio` | 0.1491 | 0.0 | 1.0 | 941 |
+| `external_link_ratio` | 0.1493 | 0.0 | 1.0 | 941 |
 | `dynamic_dom_mutation_count` | 0.7318 | 0.0 | 20.0 | 209 |
-| `num_external_scripts` | 6.8303 | 2.0 | 228.0 | 143 |
+| `num_external_scripts` | 6.8306 | 2.0 | 228.0 | 143 |
 | `inline_script_count` | 4.324 | 2.0 | 58.0 | 141 |
 | `total_forms` | 0.6007 | 0.0 | 53.0 | 101 |
 | `html_line_count` | 440.2042 | 239.0 | 19902.0 | 99 |

@@ -132,7 +132,10 @@ def extract_top_indicators(
         if imp_score >= 0.80 and matched_brand:
             indicators.append(f"Hostname resembles protected brand '{matched_brand}' on an unofficial domain.")
 
-        is_https = int(features_dict.get("IsHTTPS", features_dict.get("is_https", 1)) or 0) == 1
+        raw_https = features_dict.get("IsHTTPS")
+        if raw_https is None:
+            raw_https = features_dict.get("is_https")
+        is_https = True if raw_https is None else int(bool(raw_https))
         has_pwd = int(features_dict.get("HasPasswordField", features_dict.get("num_password_fields", 0)) or 0) > 0
         ext_sub = int(features_dict.get("HasExternalFormSubmit", features_dict.get("has_external_form_action", 0)) or 0) > 0
 

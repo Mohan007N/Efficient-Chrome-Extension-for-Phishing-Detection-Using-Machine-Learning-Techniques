@@ -22,12 +22,22 @@ const MAX_CACHE_ENTRIES = 150;
 
 const inFlightScans = new Map();
 const lastScanTimestamps = new Map();
-let cachedModelVersionInfo = { version: "v3.0.0", fetchedAt: 0 };
+const cachedModelVersions = new Map();
 
 async function getApiBaseUrl() {
   const res = await chrome.storage.local.get("api_base_url");
   const raw = (res.api_base_url || DEFAULT_API_BASE_URL).trim().replace(/\/+$/, "");
   return raw || DEFAULT_API_BASE_URL;
+}
+
+async function getApiHeaders(extra = {}) {
+  const res = await chrome.storage.local.get("api_key");
+  const apiKey = String(res.api_key || "").trim();
+  const headers = { ...extra };
+  if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
+  return headers;
 }
 
 function extractHostname(url) {
@@ -40,21 +50,25 @@ function extractHostname(url) {
 
 async function getActiveModelVersion(baseUrl) {
   const now = Date.now();
-  if (now - cachedModelVersionInfo.fetchedAt < MODEL_VER_TTL_MS && cachedModelVersionInfo.version) {
-    return cachedModelVersionInfo.version;
+  const cached = cachedModelVersions.get(baseUrl);
+  if (cached && now - cached.fetchedAt < MODEL_VER_TTL_MS && cached.version) {
+    return cached.version;
   }
   try {
-    const resp = await fetch(`${baseUrl}/version`, { method: "GET" });
+    const resp = await fetch(`${baseUrl}/version`, {
+      method: "GET",
+      headers: await getApiHeaders({ Accept: "application/json" }),
+    });
     if (resp.ok) {
       const json = await resp.json();
       const ver = `${json.url_model_version || "v3.0.0"}-${json.dom_model_version || "v3.0.0"}`;
-      cachedModelVersionInfo = { version: ver, fetchedAt: now };
+      cachedModelVersions.set(baseUrl, { version: ver, fetchedAt: now });
       return ver;
     }
   } catch {
-    // Keep last known or default
+    // Keep last known for this baseUrl or default
   }
-  return cachedModelVersionInfo.version || "v3.0.0";
+  return (cached && cached.version) || "v3.0.0";
 }
 
 async function pruneStaleCacheIfNeeded() {
@@ -128,7 +142,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const resp = await fetch(`${base}/feedback`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await getApiHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(message.payload),
         });
         const json = await resp.json();
@@ -219,6 +233,7 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
     url: pageUrl,
     domFeatures: features?.dom_features,
     modelVersion,
+    backendUrl: baseUrl,
   });
 
   if (!force) {
@@ -309,7 +324,7 @@ async function callPredictAPI(base, features) {
   try {
     const response = await fetch(`${base}/predict`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      headers: await getApiHeaders({ "Content-Type": "application/json", "Accept": "application/json" }),
       body: JSON.stringify(features),
       signal: controller.signal,
     });
@@ -327,7 +342,7 @@ async function handleExplainRequest(message) {
   const base = await getApiBaseUrl();
   const resp = await fetch(`${base}/explain`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    headers: await getApiHeaders({ "Content-Type": "application/json", "Accept": "application/json" }),
     body: JSON.stringify({
       url: message.url || "",
       hostname: message.hostname || "",
@@ -379,6 +394,9 @@ function updateBadge(tabId, riskLevel, operationalStatus = "") {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url) {
     chrome.storage.local.remove(`tab_${tabId}`);
+    chrome.tabs.sendMessage(tabId, { type: "URL_CHANGED", url: changeInfo.url }, () => {
+      void chrome.runtime.lastError;
+    });
   }
 });
 

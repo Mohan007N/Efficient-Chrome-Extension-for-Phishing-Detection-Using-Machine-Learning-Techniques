@@ -3,8 +3,7 @@ src/dom_features.py — Dedicated DOM & HTML Behaviour Feature Extraction Pipeli
 
 Extracts structured webpage behaviour signals identically from:
 1. Static HTML documents (BeautifulSoup parser — never executes JavaScript)
-2. Sandboxed headless Playwright rendered DOM snapshots (optional runtime mode)
-3. Live browser DOM telemetry payloads sent by chrome_extension/content.js
+2. Live browser DOM telemetry payloads sent by chrome_extension/content.js
 
 Privacy & Modeling Rules:
 - Never reads or stores password values, form input values, cookies, or auth tokens.
@@ -398,14 +397,60 @@ def validate_dom_feature_schema(features_or_df: dict | pd.DataFrame, expected_co
     return cols
 
 
+_STRUCTURAL_OBSERVATION_KEYS = (
+    "html_line_count",
+    "has_title",
+    "total_forms",
+    "num_password_fields",
+    "num_username_email_inputs",
+    "num_payment_inputs",
+    "num_sensitive_inputs",
+    "num_iframes",
+    "num_external_scripts",
+    "inline_script_count",
+    "fake_download_button_count",
+    "meta_refresh_redirects",
+    "js_redirect_indicators",
+    "popup_trigger_count",
+    "misleading_button_count",
+    "has_copyright_notice",
+    "has_official_contact_cue",
+    "domain_title_match_score",
+    "external_link_ratio",
+    "suspicious_link_ratio",
+)
+
+
+def has_meaningful_dom_observation(payload: dict | None) -> bool:
+    """
+    Return True only when a DOM payload carries genuine observed structural indicators
+    (preventing empty `dom_features={}` dicts from spoofing an observed webpage).
+    """
+    if not isinstance(payload, dict) or not payload:
+        return False
+    return any(float(payload.get(k) or 0.0) > 0.0 for k in _STRUCTURAL_OBSERVATION_KEYS)
+
+
 def normalize_dom_feature_dict(payload: dict, url: str = "") -> dict:
     """
     Normalize a DOM payload (either rich dom_features or legacy content.js fields)
-    into the exact DOM_FEATURE_COLUMNS + DOM_OBSERVABILITY_COLUMNS schema.
+    into the exact DOM_FEATURE_COLUMNS + DOM_OBSERVABILITY_COLUMNS schema without forcing
+    a fake HTTPS=1 default when transport info is missing or HTTP.
     """
     p = payload or {}
     parsed = urlparse(url or str(p.get("url", "")))
-    is_https = int(p.get("is_https", p.get("IsHTTPS", 1 if parsed.scheme == "https" else 0)) or 0)
+    scheme = (parsed.scheme or "").lower()
+    raw_https = p.get("is_https")
+    if raw_https is None:
+        raw_https = p.get("IsHTTPS")
+    if scheme == "https":
+        is_https: int | None = 1
+    elif scheme == "http":
+        is_https = 0
+    elif raw_https is not None:
+        is_https = int(bool(raw_https))
+    else:
+        is_https = None
 
     has_pwd = int(p.get("HasPasswordField", 0) or 0)
     ext_submit = int(p.get("HasExternalFormSubmit", 0) or 0)
@@ -423,7 +468,10 @@ def normalize_dom_feature_dict(payload: dict, url: str = "") -> dict:
         "num_cross_domain_forms": int(p.get("num_cross_domain_forms", ext_submit)),
         "num_hidden_credential_inputs": int(p.get("num_hidden_credential_inputs", has_hidden if has_pwd else 0)),
         "suspicious_login_indicators": int(
-            p.get("suspicious_login_indicators", (1 if (has_pwd and not is_https) else 0) + (1 if (has_pwd and ext_submit) else 0))
+            p.get(
+                "suspicious_login_indicators",
+                (1 if (has_pwd and is_https == 0) else 0) + (1 if (has_pwd and ext_submit) else 0),
+            )
         ),
         "brand_domain_mismatch": int(p.get("brand_domain_mismatch", 0)),
         "total_forms": int(p.get("total_forms", max(has_pwd, int(p.get("HasSubmitButton", 0) or 0)))),
@@ -472,7 +520,9 @@ def evaluate_credential_and_payment_risk(url: str, dom_feats: dict, brand_info: 
     """
     d = normalize_dom_feature_dict(dom_feats, url=url)
     b = brand_info or {}
-    is_https = d["is_https"] == 1
+    scheme = (urlparse(url or "").scheme or "").lower()
+    is_http_explicit = (scheme == "http") or (d.get("is_https") == 0)
+    is_https = not is_http_explicit
     has_login = d["num_password_fields"] > 0 or d["num_login_forms"] > 0
     has_payment = d["num_payment_inputs"] > 0 or d["has_prepaid_without_cod"] > 0 or d["has_suspicious_payment_dest"] > 0
 

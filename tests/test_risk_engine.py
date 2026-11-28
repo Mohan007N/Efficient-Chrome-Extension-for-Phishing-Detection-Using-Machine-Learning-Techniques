@@ -146,3 +146,58 @@ def test_firewall_blocked_host_is_blocked_status_not_malware():
     assert res["dimensions"]["malware_risk"]["level"] == "UNKNOWN"
 
 
+def test_empty_dom_payload_not_counted_as_valid_observation():
+    engine = HybridRiskEngine()
+    res_no_ml = engine.assess(
+        url="https://empty-dom-payload.invalid/path",
+        url_threat_prob=None,
+        dom_threat_prob=None,
+        dom_features={},
+        has_dom_observation=True,
+    )
+    assert res_no_ml["overall_risk_level"] == "UNKNOWN"
+    assert "dom_behavior" in res_no_ml["unavailable_signals"]
+
+    res_url_only = engine.assess(
+        url="https://empty-dom-payload.invalid/path",
+        url_threat_prob=0.10,
+        dom_threat_prob=None,
+        dom_features={},
+        has_dom_observation=True,
+    )
+    assert "dom_behavior" in res_url_only["unavailable_signals"]
+    assert res_url_only["dimensions"]["malware_risk"]["level"] == "UNKNOWN"
+    assert res_url_only["dimensions"]["credential_risk"]["level"] == "UNKNOWN"
+    assert res_url_only["dimensions"]["payment_risk"]["level"] == "UNKNOWN"
+    assert res_url_only["dimensions"]["deceptive_behavior_risk"]["level"] == "UNKNOWN"
+
+
+def test_http_url_with_sparse_dom_preserves_insecure_http_and_applies_thresholds():
+    engine = HybridRiskEngine()
+    res_http = engine.assess(
+        url="http://legacy-portal.invalid/login",
+        url_threat_prob=0.10,
+        dom_features={"num_password_fields": 1},
+        has_dom_observation=True,
+    )
+    assert res_http["connection_security"] == "INSECURE_HTTP"
+    assert res_http["dimensions"]["connection_security"]["level"] == "MEDIUM"
+
+    # Loaded model threshold of 0.35 escalates a 0.45 probability to HIGH phishing_risk
+    res_default_thr = engine.assess(
+        url="https://docs.invalid/",
+        url_threat_prob=0.45,
+        has_dom_observation=False,
+        url_threshold=0.50,
+    )
+    res_low_thr = engine.assess(
+        url="https://docs.invalid/",
+        url_threat_prob=0.45,
+        has_dom_observation=False,
+        url_threshold=0.35,
+    )
+    assert res_default_thr["dimensions"]["phishing_risk"]["level"] == "MEDIUM"
+    assert res_low_thr["dimensions"]["phishing_risk"]["level"] == "HIGH"
+    assert res_low_thr["thresholds"]["url_model"] == 0.35
+
+
