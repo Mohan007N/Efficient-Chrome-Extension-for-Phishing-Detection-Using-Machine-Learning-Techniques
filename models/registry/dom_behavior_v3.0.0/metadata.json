@@ -3,7 +3,7 @@
   "version": "v3.0.0",
   "model_type": "CalibratedClassifierCV",
   "algorithm": "DOM XGBoost",
-  "created_at": "2026-11-28T12:11:14.054361+00:00",
+  "created_at": "2026-11-28T14:33:49.637211+00:00",
   "dataset_fingerprint": "e4783d9fb4adf82f1740d2e57c0734d839253bad0d7b1ebc3e9ad3877e1720c4",
   "dataset_source_distribution": {
     "phreshphish": 3120,

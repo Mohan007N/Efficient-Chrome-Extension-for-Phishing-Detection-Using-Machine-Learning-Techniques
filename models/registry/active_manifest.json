@@ -5,29 +5,31 @@
       "role": "url_risk",
       "version": "v3.0.0",
       "model_type": "CalibratedClassifierCV",
-      "algorithm": "XGBoost",
-      "created_at": "2026-11-28T12:10:35.212845+00:00",
-      "dataset_fingerprint": "d135275aab0cd9e2808c7232933efd14544f569795be24a1dfd365241ec5cd7a",
+      "algorithm": "LightGBM",
+      "created_at": "2026-11-28T14:31:36.295437+00:00",
+      "dataset_fingerprint": "6bb65c926b043984a56ada4f6de0ca2353b24868589daf58747c280d705b4306",
       "dataset_source_distribution": {
-        "phiusiil": 38884,
-        "phreshphish": 3939,
-        "openphish": 196,
-        "tranco_vetted": 44,
-        "custom_verified_fixture": 16
+        "phiusiil": 34756,
+        "phreshphish": 3533,
+        "verified_seed_legit": 277,
+        "openphish": 81,
+        "tranco_vetted": 50,
+        "custom_verified_fixture": 12
       },
       "dataset_lineage": {
-        "train_rows": 43079,
-        "val_rows": 9954,
-        "test_rows": 13288,
+        "train_rows": 38709,
+        "val_rows": 8931,
+        "test_rows": 11892,
         "sources": {
-          "phiusiil": 38884,
-          "phreshphish": 3939,
-          "openphish": 196,
-          "tranco_vetted": 44,
-          "custom_verified_fixture": 16
+          "phiusiil": 34756,
+          "phreshphish": 3533,
+          "verified_seed_legit": 277,
+          "openphish": 81,
+          "tranco_vetted": 50,
+          "custom_verified_fixture": 12
         },
         "split_strategy": "domain_grouped_GroupShuffleSplit_val_only_selection",
-        "dataset_fingerprint": "d135275aab0cd9e2808c7232933efd14544f569795be24a1dfd365241ec5cd7a"
+        "dataset_fingerprint": "6bb65c926b043984a56ada4f6de0ca2353b24868589daf58747c280d705b4306"
       },
       "feature_count": 33,
       "feature_columns": [
@@ -73,124 +75,124 @@
         0,
         1
       ],
-      "threshold": 0.44,
+      "threshold": 0.55,
       "calibrated": true,
       "validation_metrics": {
         "Positive Class": "0 (Phishing / Malicious)",
-        "Accuracy": 0.9671488848704038,
-        "Phishing Precision": 0.9728346456692913,
-        "Phishing Recall": 0.9631650750341064,
-        "Phishing F1": 0.9679757124669474,
-        "Benign Precision": 0.9612228149363972,
-        "Benign Recall": 0.9713871034625752,
-        "Benign F1": 0.9662782303805301,
-        "Macro F1": 0.9671269714237387,
-        "Precision": 0.9728346456692913,
-        "Recall": 0.9631650750341064,
-        "F1 Score": 0.9679757124669474,
-        "ROC AUC": 0.9904656611742289,
-        "PR AUC": 0.9925802825311937,
-        "FPR": 0.02861289653742484,
-        "FNR": 0.036834924965893585,
+        "Accuracy": 0.962826111297727,
+        "Phishing Precision": 0.9728682170542635,
+        "Phishing Recall": 0.9431362725450901,
+        "Phishing F1": 0.9577715593996439,
+        "Benign Precision": 0.9551472041098598,
+        "Benign Recall": 0.9787406357562259,
+        "Benign F1": 0.9668,
+        "Macro F1": 0.9622857796998219,
+        "Precision": 0.9728682170542635,
+        "Recall": 0.9431362725450901,
+        "F1 Score": 0.9577715593996439,
+        "ROC AUC": 0.9865999461973147,
+        "PR AUC": 0.9883414383691844,
+        "FPR": 0.021259364243774042,
+        "FNR": 0.05686372745490982,
         "Confusion Matrix": {
           "labels": [
             "0=Phishing",
             "1=Benign"
           ],
-          "tp_phishing": 4942,
-          "fn_phishing_as_benign": 189,
-          "fp_benign_as_phishing": 138,
-          "tn_benign": 4685,
+          "tp_phishing": 3765,
+          "fn_phishing_as_benign": 227,
+          "fp_benign_as_phishing": 105,
+          "tn_benign": 4834,
           "matrix": [
             [
-              4942,
-              189
+              3765,
+              227
             ],
             [
-              138,
-              4685
+              105,
+              4834
             ]
           ]
         },
-        "Threshold": 0.44
+        "Threshold": 0.55
       },
       "test_metrics": {
         "Positive Class": "0 (Phishing / Malicious)",
-        "Accuracy": 0.9662101143889223,
-        "Phishing Precision": 0.9738760631834751,
-        "Phishing Recall": 0.9585887277619973,
-        "Phishing F1": 0.9661719279740827,
-        "Benign Precision": 0.95868138424821,
-        "Benign Recall": 0.9739354447643582,
-        "Benign F1": 0.9662482146884162,
-        "Macro F1": 0.9662100713312494,
-        "Precision": 0.9738760631834751,
-        "Recall": 0.9585887277619973,
-        "F1 Score": 0.9661719279740827,
-        "ROC AUC": 0.9900510211536919,
-        "PR AUC": 0.9925761764505405,
-        "FPR": 0.026064555235641763,
-        "FNR": 0.04141127223800269,
+        "Accuracy": 0.9631685166498486,
+        "Phishing Precision": 0.9736529318541997,
+        "Phishing Recall": 0.9415708812260536,
+        "Phishing F1": 0.9573432021815349,
+        "Benign Precision": 0.9554354178842782,
+        "Benign Recall": 0.9800659472422062,
+        "Benign F1": 0.9675939627108612,
+        "Macro F1": 0.962468582446198,
+        "Precision": 0.9736529318541997,
+        "Recall": 0.9415708812260536,
+        "F1 Score": 0.9573432021815349,
+        "ROC AUC": 0.9870629358582099,
+        "PR AUC": 0.9885991964829791,
+        "FPR": 0.019934052757793766,
+        "FNR": 0.05842911877394636,
         "Confusion Matrix": {
           "labels": [
             "0=Phishing",
             "1=Benign"
           ],
-          "tp_phishing": 6412,
-          "fn_phishing_as_benign": 277,
-          "fp_benign_as_phishing": 172,
-          "tn_benign": 6427,
+          "tp_phishing": 4915,
+          "fn_phishing_as_benign": 305,
+          "fp_benign_as_phishing": 133,
+          "tn_benign": 6539,
           "matrix": [
             [
-              6412,
-              277
+              4915,
+              305
             ],
             [
-              172,
-              6427
+              133,
+              6539
             ]
           ]
         },
-        "Threshold": 0.44
+        "Threshold": 0.55
       },
       "metrics": {
         "Positive Class": "0 (Phishing / Malicious)",
-        "Accuracy": 0.9662101143889223,
-        "Phishing Precision": 0.9738760631834751,
-        "Phishing Recall": 0.9585887277619973,
-        "Phishing F1": 0.9661719279740827,
-        "Benign Precision": 0.95868138424821,
-        "Benign Recall": 0.9739354447643582,
-        "Benign F1": 0.9662482146884162,
-        "Macro F1": 0.9662100713312494,
-        "Precision": 0.9738760631834751,
-        "Recall": 0.9585887277619973,
-        "F1 Score": 0.9661719279740827,
-        "ROC AUC": 0.9900510211536919,
-        "PR AUC": 0.9925761764505405,
-        "FPR": 0.026064555235641763,
-        "FNR": 0.04141127223800269,
+        "Accuracy": 0.9631685166498486,
+        "Phishing Precision": 0.9736529318541997,
+        "Phishing Recall": 0.9415708812260536,
+        "Phishing F1": 0.9573432021815349,
+        "Benign Precision": 0.9554354178842782,
+        "Benign Recall": 0.9800659472422062,
+        "Benign F1": 0.9675939627108612,
+        "Macro F1": 0.962468582446198,
+        "Precision": 0.9736529318541997,
+        "Recall": 0.9415708812260536,
+        "F1 Score": 0.9573432021815349,
+        "ROC AUC": 0.9870629358582099,
+        "PR AUC": 0.9885991964829791,
+        "FPR": 0.019934052757793766,
+        "FNR": 0.05842911877394636,
         "Confusion Matrix": {
           "labels": [
             "0=Phishing",
             "1=Benign"
           ],
-          "tp_phishing": 6412,
-          "fn_phishing_as_benign": 277,
-          "fp_benign_as_phishing": 172,
-          "tn_benign": 6427,
+          "tp_phishing": 4915,
+          "fn_phishing_as_benign": 305,
+          "fp_benign_as_phishing": 133,
+          "tn_benign": 6539,
           "matrix": [
             [
-              6412,
-              277
+              4915,
+              305
             ],
             [
-              172,
-              6427
+              133,
+              6539
             ]
           ]
         },
-        "Threshold": 0.44
+        "Threshold": 0.55
       },
       "training_config": {
         "cv": "StratifiedGroupKFold(3)",
@@ -209,9 +211,9 @@
         "python": "3.11.0"
       },
       "sha256_checksums": {
-        "model": "31aecd9b8b089e9cd12b2970df48f0499c4d96111a6b80ddd6b5a515265dca03",
+        "model": "951b8a4012f3fd7a12b9591c2c26f49c9260c70d221abbeb7c1069e7a4d378a3",
         "feature_columns": "39355be4fd10d1905cfa1a49b4e74fc0964e60a3dfb9243fe77ffedcecb13288",
-        "encoders": "dc1a7a402fc7bfb983e97fc023b18dab9df01f313dbee51a2581883d5139110a"
+        "encoders": "727144225f4661e8b7bd43ea580cd636691998ecd4d2085eb04aae72abdef1f3"
       },
       "active_filenames": {
         "model": "url_model.pkl",
@@ -231,7 +233,7 @@
       "version": "v3.0.0",
       "model_type": "CalibratedClassifierCV",
       "algorithm": "DOM XGBoost",
-      "created_at": "2026-11-28T12:11:14.054361+00:00",
+      "created_at": "2026-11-28T14:33:49.637211+00:00",
       "dataset_fingerprint": "e4783d9fb4adf82f1740d2e57c0734d839253bad0d7b1ebc3e9ad3877e1720c4",
       "dataset_source_distribution": {
         "phreshphish": 3120,
@@ -449,7 +451,7 @@
       ]
     }
   },
-  "updated_at": "2026-11-28T12:11:14.089133+00:00",
+  "updated_at": "2026-11-28T14:33:49.741427+00:00",
   "rollback_history": {
     "url_risk": [
       {

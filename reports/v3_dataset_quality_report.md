@@ -1,6 +1,6 @@
 # WebShield AI v3.0 — Dataset Quality & Validation Report
 
-**Generated At:** `2026-11-28T12:07:25.785068+00:00`
+**Generated At:** `2026-11-28T14:26:30.776990+00:00`
 
 ---
 
@@ -8,22 +8,22 @@
 
 | Dataset File | Verified Rows | Unique Root Domains | Phishing / Malicious (`0`) | Benign (`1`) | Non-Binary (`-1`) | Null Cells |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `data/processed/url_dataset.csv` | 66,321 | 64,374 | 33,242 | 33,079 | 0 | 0 |
+| `data/processed/url_dataset.csv` | 59,532 | 57,331 | 26,023 | 33,509 | 0 | 0 |
 | `data/processed/dom_dataset.csv` | 6,015 | 5,534 | 3,009 | 3,006 | 0 | 0 |
-| `data/processed/uncertain_samples.csv` | 520 | 520 | 0 | 0 | 520 | 0 |
+| `data/processed/uncertain_samples.csv` | 517 | 517 | 0 | 0 | 517 | 0 |
 | `data/processed/operational_status_samples.csv` | 2 | 2 | 0 | 0 | 2 | 0 |
 
 ### Domain-Disjoint Splits (`verify_domain_disjoint` = PASS / 0 Overlap)
-- **URL Splits:** Train `43,079` (`41,842` domains) | Val `9,954` (`9,657` domains) | Test `13,288` (`12,875` domains)
+- **URL Splits:** Train `38,709` (`37,264` domains) | Val `8,931` (`8,600` domains) | Test `11,892` (`11,467` domains)
 - **DOM Splits:** Train `3,128` (`2,937` domains) | Val `730` (`678` domains) | Test `968` (`904` domains)
 
 ---
 
 ## 2. Duplicate, Conflict & Timestamp Checks
 
-- **Exact Duplicate URLs Removed Across Union:** `76`
+- **Exact Duplicate URLs Removed Across Union:** `71`
 - **Conflicting Binary Labels Resolved Across Multi-Source Merge:** `0` (verified malicious signals prioritized over unverified/stale labels)
-- **Near-Duplicate Path-Normalized URLs Observed:** URL corpus `292` | DOM corpus `11`
+- **Near-Duplicate Path-Normalized URLs Observed:** URL corpus `254` | DOM corpus `11`
 - **Timestamp Coverage (`date` column):** `2024-01-01` to `2026-11-28` (invalid/missing dates: `0`)
 
 ---
@@ -32,11 +32,12 @@
 
 | Source | Verified Count |
 | --- | ---: |
-| `phiusiil` | 59,930 |
-| `phreshphish` | 5,995 |
-| `openphish` | 300 |
-| `tranco_vetted` | 78 |
-| `custom_verified_fixture` | 18 |
+| `phiusiil` | 53,480 |
+| `phreshphish` | 5,411 |
+| `verified_seed_legit` | 434 |
+| `openphish` | 116 |
+| `tranco_vetted` | 74 |
+| `custom_verified_fixture` | 17 |
 
 ---
 
@@ -44,17 +45,16 @@
 
 | Taxonomy Category | Verified Count |
 | --- | ---: |
-| `https_legitimate` | 33,049 |
-| `http_phishing` | 15,726 |
-| `https_phishing` | 15,514 |
-| `fake_login` | 1,628 |
-| `fake_banking` | 366 |
+| `https_legitimate` | 33,479 |
+| `http_phishing` | 15,151 |
+| `https_phishing` | 9,241 |
+| `fake_login` | 1,353 |
+| `fake_banking` | 271 |
 | `http_legitimate` | 30 |
 | `fake_ecommerce` | 1 |
 | `fake_payment` | 1 |
 | `homoglyph` | 1 |
 | `punycode` | 1 |
-| `compromised_legitimate` | 1 |
 | `ip_based_phishing` | 1 |
 | `typosquatting` | 1 |
 | `url_shortener` | 1 |
@@ -66,16 +66,16 @@
 ### URL Features (Top Variance / Outliers)
 | Feature | Mean | Median | Max | Outliers (`> 3xIQR`) |
 | --- | ---: | ---: | ---: | ---: |
-| `num_special_chars` | 4.9476 | 4.0 | 635.0 | 3,328 |
-| `url_length` | 33.514 | 27.0 | 4032.0 | 2,526 |
-| `domain_length` | 19.1337 | 17.0 | 100.0 | 804 |
-| `char_continuation_rate` | 0.0959 | 0.0909 | 0.6087 | 261 |
-| `num_dots` | 1.5003 | 1.0 | 84.0 | 185 |
-| `tld_length` | 2.7805 | 3.0 | 11.0 | 181 |
-| `url_entropy` | 3.9056 | 3.8797 | 5.9588 | 47 |
-| `special_char_ratio` | 0.164 | 0.16 | 0.625 | 8 |
-| `path_length` | 5.0044 | 1.0 | 3997.0 | 0 |
-| `query_length` | 1.5863 | 0.0 | 2481.0 | 0 |
+| `num_special_chars` | 4.9247 | 4.0 | 635.0 | 3,223 |
+| `url_length` | 32.764 | 25.0 | 4032.0 | 3,137 |
+| `domain_length` | 17.8641 | 16.0 | 100.0 | 1,607 |
+| `char_continuation_rate` | 0.0957 | 0.0909 | 0.5873 | 233 |
+| `tld_length` | 2.7633 | 3.0 | 11.0 | 180 |
+| `num_dots` | 1.423 | 1.0 | 84.0 | 177 |
+| `url_entropy` | 3.8735 | 3.8454 | 5.9588 | 105 |
+| `special_char_ratio` | 0.1674 | 0.1667 | 0.625 | 3 |
+| `path_length` | 5.2764 | 1.0 | 3997.0 | 0 |
+| `query_length` | 1.8488 | 0.0 | 2481.0 | 0 |
 
 ### DOM Features (Top Variance / Outliers)
 | Feature | Mean | Median | Max | Outliers (`> 3xIQR`) |

@@ -1,0 +1,11 @@
+id,url,hostname,root_domain,target_brand,attack_pattern,expected_brand_mismatch,notes
+1,https://amaz0n-login.example/signin,amaz0n-login.example,amaz0n-login.example,amazon,homoglyph_leet,1,Reserved .example lookalike impersonating Amazon
+2,https://amazon-account-verify.example/auth,amazon-account-verify.example,amazon-account-verify.example,amazon,brand_keyword_combo,1,Reserved .example credential lure for Amazon
+3,https://google-account-verify.example/login,google-account-verify.example,google-account-verify.example,google,brand_keyword_combo,1,Reserved .example lookalike targeting Google
+4,https://micros0ft-security.example/alert,micros0ft-security.example,micros0ft-security.example,microsoft,homoglyph_leet,1,Reserved .example lookalike targeting Microsoft
+5,https://flipkart-reward-claim.example/claim,flipkart-reward-claim.example,flipkart-reward-claim.example,flipkart,brand_keyword_combo,1,Reserved .example reward scam for Flipkart
+6,https://sbi-netbanking-secure.example/kyc,sbi-netbanking-secure.example,sbi-netbanking-secure.example,onlinesbi,banking_impersonation,1,Reserved .example banking KYC lure
+7,https://instagram-verify-account.example/appeal,instagram-verify-account.example,instagram-verify-account.example,instagram,brand_keyword_combo,1,Reserved .example badge verification lure
+8,https://paypa1-payment.example/checkout,paypa1-payment.example,paypa1-payment.example,paypal,homoglyph_leet,1,Reserved .example payment impersonation
+9,https://phonepe-cashback.example/redeem,phonepe-cashback.example,phonepe-cashback.example,phonepe,brand_keyword_combo,1,Reserved .example UPI cashback scam
+10,https://irctc-ticket-confirm.example/tatkal,irctc-ticket-confirm.example,irctc-ticket-confirm.example,irctc,brand_keyword_combo,1,Reserved .example travel ticket lure

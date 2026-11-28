@@ -303,6 +303,7 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
       whitelisted: result.whitelisted || false,
       top_indicators: result.top_indicators || [],
       shap_attributions: result.shap_attributions || result.assessment?.shap_attributions || [],
+      diagnostics: result.diagnostics || result.assessment?.diagnostics || {},
       assessment: result.assessment || null,
       features,
     };

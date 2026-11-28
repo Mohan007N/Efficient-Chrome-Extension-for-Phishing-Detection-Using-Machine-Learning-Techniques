@@ -66,6 +66,27 @@ HOSTED_USER_CONTENT_SUBDOMAINS: set[str] = {
     "firebasestorage.googleapis.com",
 }
 
+MULTI_TENANT_HOSTING_PLATFORMS: set[str] = {
+    "github.io",
+    "vercel.app",
+    "netlify.app",
+    "pages.dev",
+    "blogspot.com",
+    "blogger.com",
+    "wordpress.com",
+    "wixsite.com",
+    "wix.com",
+    "squarespace.com",
+    "medium.com",
+    "substack.com",
+    "herokuapp.com",
+    "web.app",
+    "firebaseapp.com",
+    "glitch.me",
+    "onrender.com",
+    "workers.dev",
+}
+
 PROTECTED_BRANDS: dict[str, set[str]] = {
     "amazon": {"amazon.com", "amazon.in", "amazon.co.uk", "amazon.de", "amazon.ca", "amazon.jp", "amazonaws.com"},
     "flipkart": {"flipkart.com"},
@@ -152,9 +173,9 @@ TRUSTED_DOMAINS: set[str] = {
     "digitalocean.com", "heroku.com", "vercel.com", "netlify.com",
     "notion.so", "slack.com", "zoom.us", "dropbox.com", "box.com",
     "adobe.com", "salesforce.com", "atlassian.com", "shopify.com",
-    "wordpress.com", "wix.com", "squarespace.com", "openai.com", "chatgpt.com", "anthropic.com",
+    "openai.com", "chatgpt.com", "anthropic.com",
     "wikipedia.org", "wikimedia.org", "khanacademy.org", "coursera.org",
-    "udemy.com", "edx.org", "medium.com", "arxiv.org",
+    "udemy.com", "edx.org", "arxiv.org",
     "bbc.com", "cnn.com", "nytimes.com", "theguardian.com", "reuters.com",
     "ndtv.com", "thehindu.com", "indiatoday.in",
 }
@@ -217,9 +238,15 @@ _REDIRECT_PARAM_KEYS = {"redirect", "redirect_url", "redirect_uri", "next", "url
 
 
 def is_hosted_user_content_subdomain(hostname: str) -> bool:
-    """Return True if host is a multi-tenant user-content hosting subdomain."""
+    """Return True if host is a multi-tenant user-content hosting platform or subdomain."""
     h = (hostname or "").lower().strip().rstrip(".")
-    return h in HOSTED_USER_CONTENT_SUBDOMAINS
+    if ":" in h and not h.startswith("["):
+        h = h.split(":", 1)[0]
+    if not h:
+        return False
+    if h in HOSTED_USER_CONTENT_SUBDOMAINS:
+        return True
+    return any(h == plat or h.endswith("." + plat) for plat in MULTI_TENANT_HOSTING_PLATFORMS)
 
 
 def extract_domain_parts(hostname: str) -> dict[str, str]:

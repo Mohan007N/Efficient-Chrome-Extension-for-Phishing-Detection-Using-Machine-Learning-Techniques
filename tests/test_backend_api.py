@@ -240,3 +240,24 @@ def test_http_without_dom_scan_endpoints_auth_chunked_limit_and_feedback_redacti
         assert len(eb["summary"]) > 10
         assert isinstance(eb["key_signals"], list)
         assert len(eb["recommended_action"]) > 5
+
+        # Official Amazon deep product/auth URL over HTTPS with clean DOM must NOT be flagged Fake/Phishing
+        amz_res = client.post("/analyze-website", json={
+            "url": "https://www.amazon.in/dp/B0CHWRXH8B/ref=sr_1_1?crid=123&keywords=phone&sprefix=phone%2Caps%2C200",
+            "dom_features": {
+                "is_https": 1,
+                "html_line_count": 400,
+                "has_title": 1,
+                "domain_title_match_score": 80.0,
+                "num_hidden_iframes": 1,
+                "suspicious_inline_js_count": 2,
+                "obfuscated_js_score": 0.55,
+                "dynamic_dom_mutation_count": 2,
+            },
+            "fetch_live": False,
+            "deep_scan": False,
+        })
+        assert amz_res.status_code == 200
+        amz_b = amz_res.json()
+        assert amz_b["overall_risk_level"] == "LOW"
+        assert amz_b["prediction_label"] == "Real (Legitimate)"

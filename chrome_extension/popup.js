@@ -300,6 +300,25 @@ function renderAssessment(data) {
     $("unavailableNote").style.display = "none";
   }
 
+  const diag = data.diagnostics || assessment.diagnostics || {};
+  const diagRows = [
+    ["URL Model Prob", diag.url_model_probability != null ? Number(diag.url_model_probability).toFixed(4) : "N/A"],
+    ["DOM Model Prob", diag.dom_model_probability != null ? Number(diag.dom_model_probability).toFixed(4) : "N/A"],
+    ["Ensemble Prob", diag.ensemble_probability != null ? Number(diag.ensemble_probability).toFixed(4) : "N/A"],
+    ["URL Risk Used", diag.url_risk_score != null ? Number(diag.url_risk_score).toFixed(4) : "N/A"],
+    ["DOM Risk Used", diag.dom_risk_score != null ? Number(diag.dom_risk_score).toFixed(4) : "N/A"],
+    ["Brand Score", diag.brand_impersonation_score != null ? Number(diag.brand_impersonation_score).toFixed(2) : "0.00"],
+    ["Tranco Rank", diag.threat_intelligence_result?.tranco_rank ?? "Unranked"],
+    ["User-Hosted", diag.threat_intelligence_result?.is_hosted_user_content ? "Yes" : "No"],
+    ["Query Tempered", diag.url_query_tempered ? "Yes" : "No"],
+    ["Thresholds", diag.thresholds ? `${diag.thresholds.url_model}/${diag.thresholds.dom_model}` : "N/A"],
+  ];
+  if ($("devDiagGrid")) {
+    $("devDiagGrid").innerHTML = diagRows.map(([k, v]) => `
+      <div class="sig-item"><span class="sig-key">${U.escapeHtml(k)}</span><span class="sig-val">${U.escapeHtml(v)}</span></div>
+    `).join("");
+  }
+
   const dom = data.features?.dom_features || {};
   const domRows = [
     ["HTTPS Transport", dom.is_https ? "Yes" : "No"],
@@ -329,6 +348,14 @@ $("toggleEvidenceBtn")?.addEventListener("click", () => {
   const open = body.style.display !== "none";
   body.style.display = open ? "none" : "block";
   $("evidenceChevron").textContent = open ? "▸" : "▾";
+});
+
+$("toggleDevDiagBtn")?.addEventListener("click", () => {
+  const body = $("devDiagBody");
+  if (!body) return;
+  const open = body.style.display !== "none";
+  body.style.display = open ? "none" : "block";
+  if ($("devDiagChevron")) $("devDiagChevron").textContent = open ? "▸" : "▾";
 });
 
 $("explainBtn")?.addEventListener("click", () => {

@@ -1,71 +1,73 @@
-# Dataset Engineering & Feature Schema Documentation
+# WebShield AI v3.0 — Dataset Documentation & Governance
 
-## 1. Multi-Source Data Philosophy
-
-Rather than relying solely on synthetic augmentation or a single static URL file, the upgraded pipeline in [`src/build_datasets.py`](../src/build_datasets.py) separates raw telemetry by modality (pure URL vs. pure DOM behaviour), preserves source provenance, isolates unverified candidates, and enforces domain-grouped splitting so pages from the same root domain cannot leak across train, validation, and test partitions.
-
-### Integrated Sources
-
-| Source | Role & License / Access | Contribution (Verified Build) | Notes |
-| --- | --- | --- | --- |
-| **PhiUSIIL Phishing URL Dataset** (`dataset/PhiUSIIL_Phishing_URL_Dataset.csv`) | Baseline URL & domain ground truth | **59,919** rows (capped at 2 per `root_domain`) | Prior synthetic rows matching `SYNTHETIC_PREFIXES` (`valid-site-*`, `scam-shop-*`, etc.) are stripped before URL feature extraction. |
-| **PhreshPhish** (`phreshphish/phreshphish`, Hugging Face CC-BY-4.0) | Real benign & phishing HTML + URLs + dates + brand targets | **806** unique domain-capped rows (from 997 cached HTML samples; max 3 per `root_domain`) | Cached safely in `data/raw/phreshphish_sample.json.gz`. HTML is parsed statically with BeautifulSoup (JavaScript is never executed). |
-| **OpenPhish** (`https://openphish.com/feed.txt`) | Live phishing threat intelligence feed | **300** active verified phishing URLs | Respects request timeouts; gracefully logs if offline. |
-| **Tranco Top-1M** (`dataset/tranco_top1m.json.gz`) | Popularity candidate index | **72** vetted trusted rows (`tranco_vetted`) | Top candidates *not* in `TRUSTED_DOMAINS` are **not** assumed safe; **417** unvetted candidates are quarantined in `data/processed/uncertain_samples.csv`. |
-| **Custom Verified & Static Fixtures** (`data/external/custom_verified.csv`) | Verified consumer-fraud registry & offline multi-label HTML fixtures | **8** rows (`7` static HTML fixtures + `1` registry entry) | Covers benign HTTP pages, legitimate portals, credential harvesting, brand impersonation, fake e-commerce upfront-payment traps, deceptive redirects, and fake download buttons. |
-| **URLhaus & PhishTank** (Optional Adapters) | Malware distribution & crowdsourced phishing feeds | Optional (`0` when keys unset) | Requires `URLHAUS_AUTH_KEY` (v2 export) or `PHISHTANK_API_KEY`; skips gracefully on missing keys, HTTP 410, or rate limits. |
+**Generated Against Build:** `2026-11-28T14:26:30+00:00` (`reports/v3_dataset_quality_report.md`)
 
 ---
 
-## 2. Multi-Label Risk Taxonomy & Provenance Schema
+## 1. Multi-Source Architecture & Governance Rules
 
-Every record in [`data/processed/combined_dataset.csv`](../data/processed/combined_dataset.csv) and [`data/processed/uncertain_samples.csv`](../data/processed/uncertain_samples.csv) preserves 13 metadata & provenance columns defined alongside `RISK_CATEGORIES` in [`src/dataset_validation.py`](../src/dataset_validation.py):
+WebShield AI v3.0 combines verified legitimate web properties, multi-source phishing corpora, static DOM captures, and controlled synthetic test fixtures while strictly preventing label leakage and blind domain whitelisting:
 
-- **Allowed `RISK_CATEGORIES`**: `benign`, `phishing`, `brand_impersonation`, `malware_distribution`, `credential_risk`, `payment_risk`, `deceptive_behavior`, `suspicious_redirect`, `unknown`.
-- **Columns (`combined_dataset.csv` & `uncertain_samples.csv`)**: `url`, `domain`, `root_domain`, `source`, `collection_timestamp`, `verification_status`, `html_available`, `primary_label`, `risk_labels`, `binary_label` (`1` = benign, `0` = threat/unsafe, `-1` = uncertain), `confidence`, `evidence`, `date`.
-
-User-submitted feedback from `POST /feedback` is appended to `data/feedback/reports.jsonl` with `"verification_status": "pending_human_review"` and is **never** automatically promoted into training datasets without manual review.
-
----
-
-## 3. Processed Datasets & Domain-Disjoint Splits
-
-| File | Rows | Columns | Unique Root Domains | Label Breakdown | Split Strategy |
-| --- | ---: | ---: | ---: | --- | --- |
-| `data/processed/combined_dataset.csv` | 61,105 | 13 | 58,401 | 30,623 benign (`1`), 30,482 unsafe (`0`) | Deduplicated verified union (`phishing`: 30,478, `payment_risk`: 2, `malware_distribution`: 1, `suspicious_redirect`: 1) |
-| `data/processed/url_dataset.csv` | 61,105 | 35 | 58,401 | 30,623 benign (`1`), 30,482 unsafe (`0`) | Pure URL features (`URL_FEATURE_COLUMNS`, 27 cols) + 8 metadata/label cols |
-| `data/processed/url_train.csv` | 42,668 | 35 | 40,880 | 21,443 benign, 21,225 unsafe | `GroupShuffleSplit` on `root_domain` |
-| `data/processed/url_val.csv` | 6,129 | 35 | 5,840 | 3,019 benign, 3,110 unsafe | Disjoint `root_domain` validation set |
-| `data/processed/url_test.csv` | 12,308 | 35 | 11,681 | 6,161 benign, 6,147 unsafe | Disjoint `root_domain` held-out test set |
-| `data/processed/dom_dataset.csv` | 813 | 47 | 710 | 551 benign (`1`), 262 unsafe (`0`) | 36 `DOM_FEATURE_COLUMNS` + 3 `DOM_OBSERVABILITY_COLUMNS` + 8 metadata cols |
-| `data/processed/dom_train.csv` | 572 | 47 | 497 | 391 benign, 181 unsafe | `GroupShuffleSplit` on `root_domain` |
-| `data/processed/dom_val.csv` | 82 | 47 | 71 | 56 benign, 26 unsafe | Disjoint `root_domain` validation set |
-| `data/processed/dom_test.csv` | 159 | 47 | 142 | 104 benign, 55 unsafe | Disjoint `root_domain` held-out test set |
-| `data/processed/dom_temporal_test.csv` | 202 | 47 | 190 | 151 benign, 51 unsafe | Chronological newest 25% of PhreshPhish records (`temporal_train_test_split`) |
-| `data/processed/uncertain_samples.csv` | 417 | 13 | 417 | 417 unknown (`-1`) | Quarantined unvetted Tranco candidates |
-
-Zero-overlap leakage checks (`verify_domain_disjoint`) confirm that `40,880 + 5,840 + 11,681 = 58,401` (`url_*`) and `497 + 71 + 142 = 710` (`dom_*`) have **0 overlapping root domains** across train/val/test partitions.
+- **Trusted Domains Are Not Blindly Exempted:** Known brand domains in `src/seed_catalog.py` / `data/verified_domains.csv` require verification (`https://` reachability or verified seed status in `src/seed_catalog.py`) before receiving `label = 1`, and compromised pages or cross-domain credential exfiltration still trigger `HIGH`/`CRITICAL`.
+- **Multi-Tenant Platform Separation:** User-content and site-builder platforms (`MULTI_TENANT_HOSTING_PLATFORMS`: `github.io`, `vercel.app`, `netlify.app`, `pages.dev`, `blogspot.com`, `blogger.com`, `wordpress.com`, `wixsite.com`, `wix.com`, `squarespace.com`, `medium.com`, `substack.com`, `herokuapp.com`, `web.app`, `firebaseapp.com`, `glitch.me`, `onrender.com`, `workers.dev`, plus `sites.google.com`, `drive.google.com`, `docs.google.com`, `storage.googleapis.com`) are isolated via `is_hosted_user_content_subdomain()` and classified as `label = 2` (`legitimate_third_party_platform`), never auto-trusted.
+- **No Synthetic Phishing Domains Mixed Into Training:** Lookalike test samples (`data/synthetic_lookalikes.csv`) strictly use reserved `.example` TLDs and are evaluated ONLY by test/benchmark scripts.
 
 ---
 
-## 4. Separated Feature Schemas
+## 2. Multiclass & Binary Label Taxonomy (`src/seed_catalog.py`)
 
-### A. URL Classifier Features (`URL_FEATURE_COLUMNS`, 27 columns — `src/features.py`)
+Binary URL and DOM classifiers train strictly on `binary_label in {0, 1}` derived from clean `multiclass_label in {0, 1, 2}` rows:
 
-`url_length`, `domain_length`, `path_length`, `query_length`, `num_subdomains`, `num_dots`, `num_hyphens_domain`, `num_digits_url`, `num_digits_domain`, `num_special_chars`, `is_ip_address`, `is_punycode_or_idn`, `has_unusual_port`, `is_url_shortener`, `has_url_obfuscation`, `url_entropy`, `domain_entropy`, `tld_length`, `is_suspicious_tld`, `suspicious_keyword_count`, `is_https`, `brand_similarity_score`, `typosquat_edit_distance`, `char_continuation_rate`, `letter_ratio`, `digit_ratio`, `tld`.
+| Multiclass Label | Semantic Name | Binary Mapping | Total in `multiclass_dataset.csv` | Usage |
+| ---: | --- | --- | ---: | --- |
+| `0` | `verified_phishing` | `0` (Phishing / Malicious) | `26,023` | URL & DOM classifier training/eval |
+| `1` | `official_legitimate` | `1` (Benign / Legitimate) | `33,450` | URL & DOM classifier training/eval |
+| `2` | `legitimate_third_party_platform` | `1` (Benign / Legitimate) | `59` | Non-hosting verified third-party platforms (`razorpay`, `stripe`, `paypal`, news/SaaS) |
+| `3` | `suspicious_or_uncertain` | Quarantined (`-1`) | `517` | Unvetted Tranco / uncertain domains (`uncertain_samples.csv`) |
+| `4` | `compromised_or_anomaly` | Isolated (`0` in `compromised_samples.csv`) | `7,298` | Phishing/malicious paths on shared hosts, anomalous/compromised records |
 
-### B. DOM Behaviour Classifier Features (`DOM_FEATURE_COLUMNS`, 36 columns — `src/dom_features.py`)
-
-- **Group A — Login & Credential Features (8)**: `num_password_fields`, `num_username_email_inputs`, `num_login_forms`, `has_external_form_action`, `num_cross_domain_forms`, `num_hidden_credential_inputs`, `suspicious_login_indicators`, `brand_domain_mismatch`.
-- **Group B — Form & Payment Features (8)**: `total_forms`, `external_forms_count`, `has_post_form`, `num_sensitive_inputs`, `num_payment_inputs`, `has_suspicious_payment_dest`, `has_prepaid_without_cod`, `has_restrictive_refund_terms`.
-- **Group C — Advertisement, Redirect & Deceptive Behaviour (11)**: `num_iframes`, `num_hidden_iframes`, `num_external_scripts`, `popup_trigger_count`, `fake_download_button_count`, `suspicious_link_ratio`, `meta_refresh_redirects`, `js_redirect_indicators`, `misleading_button_count`, `external_link_ratio`, `notification_prompt_requested`.
-- **Group D — JavaScript & Webpage Architecture (9)**: `inline_script_count`, `suspicious_inline_js_count`, `obfuscated_js_score`, `dynamic_dom_mutation_count`, `html_line_count`, `has_title`, `domain_title_match_score`, `has_copyright_notice`, `has_official_contact_cue`.
-- **Observability Metadata (`DOM_OBSERVABILITY_COLUMNS`, excluded from classifier input vectors)**: `is_https`, `mixed_content_count`, `cross_origin_iframes_uninspected`.
+Total combined `data/processed/multiclass_dataset.csv` rows: **`67,347`**.
 
 ---
 
-## 5. Gitignore & Privacy Safeguards
+## 3. Data Catalog & Domain-Disjoint Splits
 
-- `validate_dataset_schema()` raises an error if any column matches `FORBIDDEN_CREDENTIAL_COLUMNS` (`password`, `passwd`, `cookie`, `cookies`, `token`, `auth_token`, `secret`).
-- `.gitignore` excludes `data/raw/`, `data/processed/`, `data/feedback/`, `dataset/*.csv`, and `dataset/*.json.gz` so large raw scrapes, secrets, and user feedback queues are never committed to GitHub.
+| Artifact Path | Purpose | Verified Rows | Unique Root Domains | Notes |
+| --- | --- | ---: | ---: | --- |
+| `data/verified_domains.csv` | Verified seed catalog across Categories A–G | `115` | `107` | Labels: `1` (`88`), `2` (`26`), `3` (`1` — `canarabank.in` unverified candidate); `0` null cells, `0` duplicate URLs |
+| `data/phishing_domains.csv` | Real verified phishing URLs | `3,800` | `3,561` | OpenPhish cached/live + PhreshPhish parquet + verified discovery list (`0` duplicate URLs) |
+| `data/synthetic_lookalikes.csv` | Synthetic brand impersonation QA fixture | `10` | `10` | Strictly reserved `.example` hosts for automated QA (`evaluate_false_positives.py`) |
+| `data/processed/url_dataset.csv` | Clean binary URL training/eval corpus | `59,532` | `57,331` | `26,023` Phishing (`0`) / `33,509` Benign (`1`), `0` missing cells, `0` label conflicts |
+| `data/processed/dom_dataset.csv` | Clean binary DOM training/eval corpus | `6,015` | `5,534` | `3,009` Phishing (`0`) / `3,006` Benign (`1`), `0` missing cells, `0` conflicts |
+| `data/processed/uncertain_samples.csv` | Excluded unvetted Tranco candidates | `517` | `517` | Quarantined from binary ML training |
+| `data/processed/operational_status_samples.csv` | Excluded firewall/unreachable fixtures | `2` | `2` | Isolated to prevent confusing offline/blocked states with malware |
 
+### Source Distribution (`url_dataset.csv` / `combined_dataset.csv`)
+
+- `phiusiil`: `53,480`
+- `phreshphish`: `5,411`
+- `verified_seed_legit`: `434` (realistic Category A–G inner/query/search URLs)
+- `openphish`: `116`
+- `tranco_vetted`: `74`
+- `custom_verified_fixture`: `17`
+
+### Domain-Disjoint Splits (`verify_domain_disjoint` = PASS / `0` root domain overlap)
+
+- **URL Splits:** `url_train.csv` = **`38,709`** (`37,264` domains) | `url_val.csv` = **`8,931`** (`8,600` domains) | `url_test.csv` = **`11,892`** (`11,467` domains)
+- **DOM Splits:** `dom_train.csv` = **`3,128`** (`2,937` domains) | `dom_val.csv` = **`730`** (`678` domains) | `dom_test.csv` = **`968`** (`904` domains) | `dom_temporal_test.csv` = **`1,080`**
+
+---
+
+## 4. Pipeline Scripts (`scripts/`)
+
+1. `python scripts/update_trusted_domains.py` *(pass `--verify-live` for TLS reachability checks)* -> rebuilds `data/verified_domains.csv`
+2. `python scripts/update_threat_feeds.py` *(pass `--fetch-live` for OpenPhish refresh)* -> rebuilds `data/phishing_domains.csv` & `data/synthetic_lookalikes.csv`
+3. `python scripts/build_training_dataset.py` -> invokes `src/build_datasets.py` + `scripts/deduplicate_dataset.py` + `scripts/validate_dataset.py`
+4. `python scripts/validate_dataset.py` -> verifies schemas, null counts, duplicate URLs, multiclass distribution, and `verify_domain_disjoint` across all splits.
+
+---
+
+## 5. Privacy & Repository Safeguards
+
+- `validate_dataset_schema()` rejects any dataframe containing `FORBIDDEN_CREDENTIAL_COLUMNS` (`password`, `passwd`, `cookie`, `cookies`, `token`, `auth_token`, `secret`).
+- `.gitignore` excludes `data/raw/`, `data/processed/`, `data/feedback/`, and large `.csv`/`.json.gz` datasets while allowing lightweight reproducible catalogs (`verified_domains.csv`, `synthetic_lookalikes.csv`, `phishing_domains.csv` or local rebuilds).

@@ -49,6 +49,7 @@ from src.features import (
     normalize_url,
 )
 from src.model_registry import compute_file_sha256
+from src.seed_catalog import CATEGORY_URL_TEMPLATES
 
 RAW_DIR = os.path.join("data", "raw")
 EXTERNAL_DIR = os.path.join("data", "external")
@@ -669,7 +670,32 @@ def fetch_external_threat_and_benign_feeds(limit_openphish: int = 500, limit_tra
             })
         print(f"OpenPhish: {len(verified_rows)} verified URLs")
     except Exception as e:
-        print(f"[WARN] OpenPhish unavailable: {e}")
+        print(f"[WARN] Live OpenPhish fetch unavailable ({e}); checking local data/phishing_domains.csv cache...")
+        ph_cache = os.path.join("data", "phishing_domains.csv")
+        if os.path.exists(ph_cache):
+            ph_cached_df = pd.read_csv(ph_cache)
+            op_sub = ph_cached_df[ph_cached_df["source"].astype(str) == "openphish"].head(limit_openphish)
+            for _, opr in op_sub.iterrows():
+                nu = normalize_url(str(opr.get("normalized_url") or opr.get("original_url") or ""))
+                if not nu:
+                    continue
+                host = urlparse(nu).hostname or ""
+                root = extract_root_domain(host)
+                openphish_hosts.add(root)
+                verified_rows.append({
+                    "url": nu, "domain": host, "root_domain": root,
+                    "source": "openphish", "collection_timestamp": ts,
+                    "collection_method": "openphish_cached_csv",
+                    "feature_extraction_version": URL_FEATURE_VERSION,
+                    "content_sha256": "", "verification_status": "verified",
+                    "operational_status": "Malicious",
+                    "threat_category": _infer_url_taxonomy_category(nu, "phishing", "openphish"),
+                    "html_available": False, "primary_label": "phishing",
+                    "risk_labels": "phishing|credential_risk", "binary_label": 0,
+                    "confidence": 0.95, "evidence": "Listed in cached OpenPhish verified phishing feed.",
+                    "date": str(opr.get("last_seen") or ts[:10])[:10],
+                })
+            print(f"OpenPhish (cached): {len(verified_rows)} verified URLs")
 
     uh_key = (os.getenv("URLHAUS_AUTH_KEY") or "").strip()
     if uh_key:
@@ -776,6 +802,74 @@ def export_runtime_intel_manifest():
         json.dump(meta, f, indent=2)
 
 
+def build_verified_seed_url_rows(ts: str) -> pd.DataFrame:
+    """
+    Build verified legitimate URL rows (root + realistic category path/query routes) from
+    `data/verified_domains.csv` (labels 1 & 2, excluding multi-tenant user-content platforms)
+    so the URL classifier learns genuine deep paths and search/product query parameters.
+    """
+    ver_csv = os.path.join("data", "verified_domains.csv")
+    if not os.path.exists(ver_csv):
+        return pd.DataFrame()
+    vdf = pd.read_csv(ver_csv)
+    rows: list[dict] = []
+    for _, r in vdf.iterrows():
+        lbl = int(r.get("label", 3))
+        if lbl not in (1, 2):
+            continue
+        dom = str(r.get("domain") or "").strip().lower()
+        root = str(r.get("root_domain") or extract_root_domain(dom)).strip().lower()
+        cat = str(r.get("category") or "productivity").strip().lower()
+        if not dom or is_hosted_user_content_subdomain(dom) or "shortener" in cat:
+            continue
+        host = f"www.{dom}" if not dom.startswith(("mail.", "web.", "pay.", "outlook.", "onlinesbi.")) else dom
+        paths = ["/"] + CATEGORY_URL_TEMPLATES.get(cat, ["/about", "/docs/overview"])
+        for p in paths:
+            u = normalize_url(f"https://{host}{p}")
+            rows.append({
+                "url": u,
+                "domain": host,
+                "root_domain": root,
+                "source": "verified_seed_legit",
+                "collection_timestamp": ts,
+                "collection_method": str(r.get("verification_source") or "verified_domains_csv"),
+                "feature_extraction_version": URL_FEATURE_VERSION,
+                "content_sha256": "",
+                "verification_status": "verified",
+                "operational_status": "Benign",
+                "threat_category": "https_legitimate",
+                "html_available": False,
+                "primary_label": "benign",
+                "risk_labels": "benign",
+                "binary_label": 1,
+                "multiclass_label": lbl,
+                "confidence": 0.99 if lbl == 1 else 0.95,
+                "evidence": f"Verified {'official' if lbl == 1 else 'third-party'} domain route ({dom}).",
+                "date": str(r.get("verification_date") or ts[:10])[:10],
+            })
+    return pd.DataFrame(rows)
+
+
+def _assign_multiclass_label(row: pd.Series) -> int:
+    """Assign 5-class taxonomy label: 0=phishing, 1=official legit, 2=third-party legit, 3=uncertain, 4=compromised legit."""
+    if "multiclass_label" in row.index and pd.notna(row["multiclass_label"]):
+        val = int(row["multiclass_label"])
+        if val in (0, 1, 2, 3, 4):
+            return val
+    bl = int(row.get("binary_label", -1))
+    if bl == -1:
+        return 3
+    tcat = str(row.get("threat_category") or "").lower()
+    dom = str(row.get("domain") or "").lower()
+    if bl == 0:
+        if tcat == "compromised_legitimate" or is_hosted_user_content_subdomain(dom):
+            return 4
+        return 0
+    if str(row.get("ownership_type") or "") == "third_party":
+        return 2
+    return 1
+
+
 def build_all_datasets(
     max_phiusiil: int = 60000,
     max_phreshphish: int = 8000,
@@ -783,13 +877,14 @@ def build_all_datasets(
     test_shards: int = 2,
     refresh_phreshphish: bool = False,
 ) -> dict:
-    """Build v3.0 URL, DOM, combined, operational, and uncertain datasets + quality audit report."""
+    """Build v3.0 URL, DOM, 5-class multiclass, combined, operational, and uncertain datasets + quality audit report."""
     os.makedirs(RAW_DIR, exist_ok=True)
     os.makedirs(EXTERNAL_DIR, exist_ok=True)
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     ts = _now_iso()
 
     custom_df, html_fixtures, operational_df = ensure_custom_verified_fixtures()
+    seed_legit_df = build_verified_seed_url_rows(ts)
     phresh_df = fetch_phreshphish_parquet_corpus(
         train_shards=train_shards,
         test_shards=test_shards,
@@ -963,10 +1058,26 @@ def build_all_datasets(
     dom_val.to_csv(os.path.join(PROCESSED_DIR, "dom_val.csv"), index=False)
     dom_test.to_csv(os.path.join(PROCESSED_DIR, "dom_test.csv"), index=False)
 
-    # 3. Combine verified metadata -> resolve conflicts -> extract PSL URL features
+    # 3. Combine verified metadata -> assign 5-class labels -> keep uncertain(3) & compromised(4) separate from binary training
     phresh_meta_df = pd.DataFrame(phresh_meta_rows)
-    combined_raw = pd.concat([custom_df, phresh_meta_df, feeds_df, phi_meta_df], ignore_index=True)
-    combined_df, url_conflicts = detect_conflicting_labels(combined_raw)
+    all_candidates_raw = pd.concat([custom_df, seed_legit_df, phresh_meta_df, feeds_df, phi_meta_df], ignore_index=True)
+    all_candidates_raw["multiclass_label"] = all_candidates_raw.apply(_assign_multiclass_label, axis=1)
+
+    compromised_df = all_candidates_raw[all_candidates_raw["multiclass_label"] == 4].copy().reset_index(drop=True)
+    if not compromised_df.empty:
+        compromised_df.to_csv(os.path.join(PROCESSED_DIR, "compromised_samples.csv"), index=False)
+
+    # Save 5-class multiclass dataset (0=phishing, 1=official_legit, 2=third_party_legit, 3=uncertain, 4=compromised_legit)
+    uncertain_with_mc = uncertain_df.copy()
+    if not uncertain_with_mc.empty:
+        uncertain_with_mc["multiclass_label"] = 3
+    multiclass_df = pd.concat([all_candidates_raw, uncertain_with_mc], ignore_index=True)
+    multiclass_df = multiclass_df.drop_duplicates(subset=["url"], keep="first").reset_index(drop=True)
+    multiclass_df.to_csv(os.path.join(PROCESSED_DIR, "multiclass_dataset.csv"), index=False)
+
+    # Binary training uses strictly label 0 (verified phishing) & labels 1,2 (verified legitimate)
+    binary_pool = all_candidates_raw[all_candidates_raw["multiclass_label"].isin([0, 1, 2])].copy()
+    combined_df, url_conflicts = detect_conflicting_labels(binary_pool)
     validate_dataset_schema(
         combined_df,
         ["url", "domain", "root_domain", "source", "verification_status", "operational_status", "threat_category", "primary_label", "binary_label"],

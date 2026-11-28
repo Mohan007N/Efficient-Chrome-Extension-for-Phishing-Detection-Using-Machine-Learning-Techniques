@@ -38,9 +38,15 @@ from src.dom_features import (
     extract_dom_features_from_html,
     has_meaningful_dom_observation,
     normalize_dom_feature_dict,
+    validate_dom_feature_schema,
 )
 from src.evaluate import get_class_probabilities, resolve_class_indices
-from src.features import URL_FEATURE_COLUMNS, extract_root_domain, extract_url_features
+from src.features import (
+    URL_FEATURE_COLUMNS,
+    extract_root_domain,
+    extract_url_features,
+    validate_url_feature_schema,
+)
 from src.model_registry import get_active_registry_manifest, verify_active_model_integrity
 
 logger = logging.getLogger("PhishingAPI.Predictor")
@@ -120,7 +126,16 @@ class PhishingPredictor:
                     if os.path.exists(url_enc_path):
                         self._url_encoders = joblib.load(url_enc_path)
                     if os.path.exists(url_feat_path):
-                        self._url_features = joblib.load(url_feat_path)
+                        loaded_url_cols = joblib.load(url_feat_path)
+                        if list(loaded_url_cols) != list(URL_FEATURE_COLUMNS):
+                            self._integrity_ok = False
+                            self._url_model = None
+                            self._url_model_status = "schema_mismatch"
+                            self._model_errors.append(
+                                f"URL feature schema mismatch: expected {len(URL_FEATURE_COLUMNS)} canonical columns, got {len(loaded_url_cols)}."
+                            )
+                        else:
+                            self._url_features = list(loaded_url_cols)
                 else:
                     self._url_model_status = "invalid_classes"
         else:
@@ -146,7 +161,16 @@ class PhishingPredictor:
                     self._dom_model = candidate
                     self._dom_model_status = "loaded"
                     if os.path.exists(dom_feat_path):
-                        self._dom_features = joblib.load(dom_feat_path)
+                        loaded_dom_cols = joblib.load(dom_feat_path)
+                        if list(loaded_dom_cols) != list(DOM_FEATURE_COLUMNS):
+                            self._integrity_ok = False
+                            self._dom_model = None
+                            self._dom_model_status = "schema_mismatch"
+                            self._model_errors.append(
+                                f"DOM feature schema mismatch: expected {len(DOM_FEATURE_COLUMNS)} canonical columns, got {len(loaded_dom_cols)}."
+                            )
+                        else:
+                            self._dom_features = list(loaded_dom_cols)
                 else:
                     self._dom_model_status = "invalid_classes"
         else:
@@ -196,13 +220,11 @@ class PhishingPredictor:
         }
 
     def prepare_url_dataframe(self, url: str) -> pd.DataFrame:
-        """Build aligned single-row DataFrame for Model 1 (URL Risk Classifier)."""
+        """Build schema-validated single-row DataFrame for Model 1 (URL Risk Classifier)."""
         feats = extract_url_features(url)
-        df = pd.DataFrame([feats])
-        for c in self._url_features:
-            if c not in df.columns:
-                df[c] = 0
-        df = df[self._url_features].copy()
+        expected_cols = self._url_features or list(URL_FEATURE_COLUMNS)
+        validate_url_feature_schema(feats, expected_cols)
+        df = pd.DataFrame([feats])[expected_cols].copy()
         if "tld" in df.columns and "tld" in self._url_encoders:
             df["tld"] = df["tld"].fillna("com").astype(str).str.lower().str.strip()
             df[["tld"]] = self._url_encoders["tld"].transform(df[["tld"]])
@@ -211,13 +233,11 @@ class PhishingPredictor:
         return df
 
     def prepare_dom_dataframe(self, dom_dict: dict, url: str = "") -> pd.DataFrame:
-        """Build aligned single-row DataFrame for Model 2 (DOM Behaviour Classifier)."""
+        """Build schema-validated single-row DataFrame for Model 2 (DOM Behaviour Classifier)."""
         norm = normalize_dom_feature_dict(dom_dict, url=url)
-        df = pd.DataFrame([norm])
-        for c in self._dom_features:
-            if c not in df.columns:
-                df[c] = 0.0
-        df = df[self._dom_features].copy()
+        expected_cols = self._dom_features or list(DOM_FEATURE_COLUMNS)
+        validate_dom_feature_schema(norm, expected_cols)
+        df = pd.DataFrame([norm])[expected_cols].copy()
         for c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
         return df
@@ -309,6 +329,7 @@ class PhishingPredictor:
             analysis_mode=analysis_mode,
             url_threshold=self._url_threshold,
             dom_threshold=self._dom_threshold,
+            tranco_rank=intel_res.get("tranco_rank"),
         )
 
         overall = assessment["overall_risk_level"]
@@ -401,5 +422,6 @@ class PhishingPredictor:
             "evidence": assessment_public["evidence"],
             "reasoning": assessment_public.get("reasoning", []),
             "shap_attributions": assessment_public.get("shap_attributions", []),
+            "diagnostics": assessment_public.get("diagnostics", {}),
             "assessment": assessment_public,
         }

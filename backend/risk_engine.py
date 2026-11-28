@@ -28,7 +28,11 @@ from src.dom_features import (
     has_meaningful_dom_observation,
     normalize_dom_feature_dict,
 )
-from src.features import compute_brand_impersonation_details, extract_root_domain
+from src.features import (
+    compute_brand_impersonation_details,
+    extract_root_domain,
+    is_hosted_user_content_subdomain,
+)
 
 
 def _score_to_level(score: float | None, has_evidence: bool = True, high_threshold: float = 0.65) -> str:
@@ -84,6 +88,7 @@ class HybridRiskEngine:
         analysis_mode: str = "url_only",
         url_threshold: float = 0.50,
         dom_threshold: float = 0.50,
+        tranco_rank: int | None = None,
     ) -> dict[str, Any]:
         parsed = urlparse(url or "")
         host = (hostname or parsed.hostname or "").lower().strip()
@@ -163,6 +168,22 @@ class HybridRiskEngine:
                 "unavailable_signals": unavailable,
                 "recommended_action": "Local or private network resource. Only proceed if you intentionally host or trust this local service.",
                 "assessment_confidence_note": "Website not inspected by external ML or threat feeds (LOCAL_NETWORK_UNVERIFIED).",
+                "diagnostics": {
+                    "url_model_probability": None,
+                    "dom_model_probability": None,
+                    "ensemble_probability": None,
+                    "threat_intelligence_result": {"matched": False, "status": "LOCAL_NETWORK_UNVERIFIED"},
+                    "url_risk_score": None,
+                    "dom_risk_score": None,
+                    "brand_impersonation_score": 0.0,
+                    "connection_security_result": {"level": "UNKNOWN", "status": "LOCAL_NETWORK_UNVERIFIED"},
+                    "final_risk_score": None,
+                    "final_classification": "UNKNOWN",
+                    "top_contributing_indicators": [],
+                    "missing_or_unavailable_evidence": unavailable,
+                    "established_official": False,
+                    "url_query_tempered": False,
+                },
             }
 
         # ── 1. Connection Security ───────────────────────────────────────────
@@ -208,15 +229,63 @@ class HybridRiskEngine:
                 if fl not in pay_evidence:
                     pay_evidence.append(fl)
 
+        reg_matched = bool(reg.get("matched"))
+        reg_cat = str(reg.get("category") or "")
+        reg_source = str(reg.get("source") or "")
+
+        user_hosted = is_hosted_user_content_subdomain(host)
+        established_official = (
+            (not is_local)
+            and (not user_hosted)
+            and (bool(is_whitelisted) or (tranco_rank is not None and int(tranco_rank) <= 10_000))
+            and brand_score < 0.50
+            and (not reg_matched)
+        )
+
+        # Compute structural malware / deceptive signals prior to URL-vs-DOM corroboration check
+        fake_dl = int(dom_norm.get("fake_download_button_count", 0))
+        susp_js = int(dom_norm.get("suspicious_inline_js_count", 0))
+        obf_js = float(dom_norm.get("obfuscated_js_score", 0.0))
+        dyn_mut = int(dom_norm.get("dynamic_dom_mutation_count", 0))
+        hidden_ifr = int(dom_norm.get("num_hidden_iframes", 0))
+        popups = int(dom_norm.get("popup_trigger_count", 0))
+        meta_redir = int(dom_norm.get("meta_refresh_redirects", 0))
+        js_redir = int(dom_norm.get("js_redirect_indicators", 0))
+        mislead_cta = int(dom_norm.get("misleading_button_count", 0))
+        notif_prompt = int(dom_norm.get("notification_prompt_requested", 0))
+        susp_link_ratio = float(dom_norm.get("suspicious_link_ratio", 0.0))
+        ext_redirects = max(0, len(redirect_chain or []) - 1)
+        has_ext_form = int(dom_norm.get("has_external_form_action", 0)) > 0
+
+        dom_compromised = (
+            (dom_threat_prob is not None and float(dom_threat_prob) >= float(dom_threshold))
+            or cred_score >= 0.35
+            or pay_score >= 0.35
+            or fake_dl > 0
+            or (hidden_ifr >= 2 and (has_ext_form or meta_redir > 0 or js_redir > 0 or ext_redirects >= 2))
+            or reg_matched
+            or conn_level == "HIGH"
+        )
+
         # ── 4. Calibrated ML Phishing Probability & Threshold Application ────
+        url_query_tempered = bool(
+            established_official
+            and (not dom_compromised)
+            and url_threat_prob is not None
+            and float(url_threat_prob) >= float(url_threshold)
+        )
+        eff_url_prob = min(float(url_threat_prob), 0.24) if url_query_tempered else (
+            float(url_threat_prob) if url_threat_prob is not None else None
+        )
+
         ml_components: list[tuple[float, float]] = []
         thr_components: list[tuple[float, float]] = []
-        if url_threat_prob is not None:
+        if eff_url_prob is not None:
             w_u = 0.45 if dom_threat_prob is not None else 1.0
-            ml_components.append((w_u, float(url_threat_prob)))
+            ml_components.append((w_u, eff_url_prob))
             thr_components.append((w_u, float(url_threshold)))
         if dom_threat_prob is not None:
-            w_d = 0.55 if url_threat_prob is not None else 1.0
+            w_d = 0.55 if eff_url_prob is not None else 1.0
             ml_components.append((w_d, float(dom_threat_prob)))
             thr_components.append((w_d, float(dom_threshold)))
 
@@ -231,7 +300,12 @@ class HybridRiskEngine:
         phish_evidence: list[str] = []
         phish_signals: list[float] = []
         threshold_breached = False
-        if url_threat_prob is not None:
+        if url_query_tempered and url_threat_prob is not None:
+            phish_signals.append(eff_url_prob)
+            phish_evidence.append(
+                f"Established domain ({root}) passed DOM, credential, payment, TLS & threat-intel checks; deep URL path/query ML score ({float(url_threat_prob):.2f}) does not indicate domain impersonation."
+            )
+        elif url_threat_prob is not None:
             phish_signals.append(float(url_threat_prob))
             if float(url_threat_prob) >= float(url_threshold):
                 threshold_breached = True
@@ -249,9 +323,6 @@ class HybridRiskEngine:
             phish_signals.append(brand_score)
             phish_evidence.extend(brand_info["evidence"])
 
-        reg_matched = bool(reg.get("matched"))
-        reg_cat = str(reg.get("category") or "")
-        reg_source = str(reg.get("source") or "")
         if reg_matched:
             if "malware" in reg_cat or reg_source == "urlhaus":
                 pass
@@ -264,8 +335,8 @@ class HybridRiskEngine:
 
         if phish_signals:
             phish_score: float | None = max(phish_signals) if (reg_matched or threshold_breached) else sum(phish_signals) / len(phish_signals)
-            if url_threat_prob is not None and dom_threat_prob is not None:
-                if url_threat_prob >= float(url_threshold) and dom_threat_prob >= float(dom_threshold):
+            if eff_url_prob is not None and dom_threat_prob is not None:
+                if eff_url_prob >= float(url_threshold) and dom_threat_prob >= float(dom_threshold):
                     phish_score = max(phish_score, 0.85)
         else:
             phish_score = None
@@ -277,50 +348,38 @@ class HybridRiskEngine:
             malware_score = max(malware_score, float(reg.get("risk_floor", 0.90)))
             malware_evidence.append(f"Malware Threat Feed ({reg_source}): {reg.get('reason')}")
 
-        fake_dl = int(dom_norm.get("fake_download_button_count", 0))
-        susp_js = int(dom_norm.get("suspicious_inline_js_count", 0))
-        obf_js = float(dom_norm.get("obfuscated_js_score", 0.0))
-        dyn_mut = int(dom_norm.get("dynamic_dom_mutation_count", 0))
-
         if fake_dl > 0:
             malware_score += min(0.50, 0.35 + 0.10 * (fake_dl - 1))
             malware_evidence.append(f"Detected {fake_dl} deceptive or executable download button/link pattern(s).")
-        if susp_js >= 2 and (obf_js >= 0.50 or dyn_mut > 0):
-            malware_score += 0.45
-            malware_evidence.append("Suspicious obfuscated inline JavaScript combined with dynamic script/iframe injection.")
-        elif obf_js >= 0.70:
-            malware_score += 0.30
-            malware_evidence.append("High-entropy obfuscated inline JavaScript detected.")
+        if not established_official or fake_dl > 0:
+            if susp_js >= 2 and (obf_js >= 0.70 or (obf_js >= 0.50 and (fake_dl > 0 or hidden_ifr >= 2 or js_redir > 0 or meta_redir > 0)) or dyn_mut > 0 and susp_js >= 3):
+                malware_score += 0.45
+                malware_evidence.append("Suspicious obfuscated inline JavaScript combined with dynamic script/iframe injection.")
+            elif obf_js >= 0.75:
+                malware_score += 0.30
+                malware_evidence.append("High-entropy obfuscated inline JavaScript detected.")
         malware_score = round(min(1.0, malware_score), 4)
 
         # ── 6. Deceptive Behaviour Risk ──────────────────────────────────────
         dec_evidence: list[str] = []
         dec_score = 0.0
-        hidden_ifr = int(dom_norm.get("num_hidden_iframes", 0))
-        popups = int(dom_norm.get("popup_trigger_count", 0))
-        meta_redir = int(dom_norm.get("meta_refresh_redirects", 0))
-        js_redir = int(dom_norm.get("js_redirect_indicators", 0))
-        mislead_cta = int(dom_norm.get("misleading_button_count", 0))
-        notif_prompt = int(dom_norm.get("notification_prompt_requested", 0))
-        susp_link_ratio = float(dom_norm.get("suspicious_link_ratio", 0.0))
-
-        ext_redirects = max(0, len(redirect_chain or []) - 1)
-        if hidden_ifr > 0:
+        if hidden_ifr >= 2 or (hidden_ifr >= 1 and (has_ext_form or meta_redir > 0 or js_redir > 0 or ext_redirects >= 2 or fake_dl > 0)):
             dec_score += 0.35
-            dec_evidence.append(f"Detected {hidden_ifr} hidden or zero-dimension iframe(s).")
+            dec_evidence.append(f"Detected {hidden_ifr} hidden or zero-dimension iframe(s) paired with suspicious page structure.")
         if meta_redir > 0 or js_redir > 0 or ext_redirects >= 2:
-            dec_score += 0.35
-            dec_evidence.append("Multiple or automatic page redirect indicators observed.")
+            if not established_official or ext_redirects >= 2 or meta_redir > 0:
+                dec_score += 0.35
+                dec_evidence.append("Multiple or automatic page redirect indicators observed.")
         if popups >= 2:
             dec_score += 0.25
             dec_evidence.append(f"Observed {popups} window.open popup trigger(s).")
-        if notif_prompt:
+        if notif_prompt and not established_official:
             dec_score += 0.20
             dec_evidence.append("Page requests browser notification permissions.")
-        if mislead_cta >= 2:
+        if mislead_cta >= 2 and not established_official:
             dec_score += 0.25
             dec_evidence.append("Urgency or deceptive call-to-action phrasing detected.")
-        if susp_link_ratio >= 0.40 and int(dom_norm.get("html_line_count", 0)) > 20:
+        if susp_link_ratio >= 0.40 and int(dom_norm.get("html_line_count", 0)) > 20 and not established_official:
             dec_score += 0.20
             dec_evidence.append(f"High proportion of dummy/javascript links ({susp_link_ratio:.0%}).")
         dec_score = round(min(1.0, dec_score), 4)
@@ -474,4 +533,27 @@ class HybridRiskEngine:
                 f"operational_status={operational_status}; phishing_probability={'null (model unavailable)' if ml_phishing_prob is None else ml_phishing_prob}; "
                 f"thresholds=(url={float(url_threshold):.2f}, dom={float(dom_threshold):.2f}); heuristic_risk_index={heuristic_index}/100."
             ),
+            "diagnostics": {
+                "url_model_probability": round(float(url_threat_prob), 4) if url_threat_prob is not None else None,
+                "dom_model_probability": round(float(dom_threat_prob), 4) if dom_threat_prob is not None else None,
+                "ensemble_probability": ml_phishing_prob,
+                "threat_intelligence_result": {
+                    "matched": reg_matched,
+                    "source": reg.get("source"),
+                    "category": reg.get("category"),
+                    "tranco_rank": tranco_rank,
+                    "is_hosted_user_content": user_hosted,
+                },
+                "url_risk_score": round(float(eff_url_prob), 4) if eff_url_prob is not None else None,
+                "dom_risk_score": round(float(max(cred_score, pay_score, malware_score, dec_score)), 4) if has_dom_observation else None,
+                "brand_impersonation_score": round(brand_score, 4),
+                "connection_security_result": {"level": conn_level, "status": conn_status},
+                "final_risk_score": heuristic_index,
+                "final_classification": overall,
+                "top_contributing_indicators": all_evidence[:8],
+                "missing_or_unavailable_evidence": unavailable,
+                "established_official": established_official,
+                "url_query_tempered": url_query_tempered,
+                "thresholds": {"url_model": float(url_threshold), "dom_model": float(dom_threshold)},
+            },
         }

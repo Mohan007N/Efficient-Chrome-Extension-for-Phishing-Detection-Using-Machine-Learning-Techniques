@@ -213,3 +213,45 @@ def test_http_url_with_sparse_dom_preserves_insecure_http_and_applies_thresholds
     assert res_real["prediction_label"] == "Real (Legitimate)"
 
 
+def test_official_amazon_query_url_and_telemetry_dom_not_false_critical():
+    engine = HybridRiskEngine()
+    res = engine.assess(
+        url="https://www.amazon.in/dp/B0CHWRXH8B/ref=sr_1_1?crid=123&keywords=phone&sprefix=phone%2Caps%2C200",
+        url_threat_prob=0.87,
+        dom_threat_prob=0.06,
+        dom_features={
+            "is_https": 1,
+            "html_line_count": 450,
+            "has_title": 1,
+            "domain_title_match_score": 80.0,
+            "num_hidden_iframes": 1,
+            "suspicious_inline_js_count": 3,
+            "obfuscated_js_score": 0.55,
+            "dynamic_dom_mutation_count": 2,
+        },
+        is_whitelisted=True,
+        has_dom_observation=True,
+        url_threshold=0.44,
+        dom_threshold=0.65,
+        tranco_rank=670,
+    )
+    assert res["overall_risk_level"] == "LOW"
+    assert res["prediction_label"] == "Real (Legitimate)"
+    assert res["url_model_threat_probability"] == 0.87
+
+    # User-hosted subdomain on trusted root (e.g. sites.google.com) must NEVER receive established_official softening
+    res_hosted = engine.assess(
+        url="https://sites.google.com/view/verify-wallet?token=a%20b",
+        url_threat_prob=0.87,
+        dom_threat_prob=0.10,
+        dom_features={"is_https": 1, "html_line_count": 60, "has_title": 1},
+        is_whitelisted=False,
+        has_dom_observation=True,
+        url_threshold=0.44,
+        dom_threshold=0.65,
+        tranco_rank=1,
+    )
+    assert res_hosted["overall_risk_level"] in ("HIGH", "CRITICAL")
+    assert res_hosted["prediction_label"] == "Fake / Phishing"
+
+

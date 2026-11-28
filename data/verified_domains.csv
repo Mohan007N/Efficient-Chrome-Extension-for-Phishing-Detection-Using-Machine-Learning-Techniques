@@ -1,0 +1,116 @@
+id,domain,root_domain,brand,category,ownership_type,label,verification_source,verification_date,confidence,notes
+1,amazon.in,amazon.in,Amazon,ecommerce,official,1,tranco_rank_670+threat_feed_clean+dns_ok,2026-11-28,high,Official Amazon India storefront
+2,amazon.com,amazon.com,Amazon,ecommerce,official,1,tranco_rank_27+threat_feed_clean+dns_ok,2026-11-28,high,Official Amazon US storefront
+3,amazon.co.uk,amazon.co.uk,Amazon,ecommerce,official,1,tranco_rank_327+threat_feed_clean+dns_ok,2026-11-28,high,Official Amazon UK storefront
+4,flipkart.com,flipkart.com,Flipkart,ecommerce,official,1,tranco_rank_861+threat_feed_clean+dns_ok,2026-11-28,high,Official Flipkart marketplace
+5,myntra.com,myntra.com,Myntra,ecommerce,official,1,tranco_rank_1173+threat_feed_clean+dns_ok,2026-11-28,high,Official Myntra fashion retail
+6,meesho.com,meesho.com,Meesho,ecommerce,official,1,tranco_rank_1218+threat_feed_clean+dns_ok,2026-11-28,high,Official Meesho marketplace
+7,ajio.com,ajio.com,AJIO,ecommerce,official,1,tranco_rank_6265+threat_feed_clean+dns_ok,2026-11-28,high,Official AJIO retail
+8,nykaa.com,nykaa.com,Nykaa,ecommerce,official,1,tranco_rank_11219+threat_feed_clean+dns_ok,2026-11-28,high,Official Nykaa storefront
+9,tatacliq.com,tatacliq.com,Tata CLiQ,ecommerce,official,1,tranco_rank_39707+threat_feed_clean+dns_ok,2026-11-28,high,Official Tata CLiQ store
+10,reliancedigital.in,reliancedigital.in,Reliance Digital,ecommerce,official,1,tranco_rank_8800+threat_feed_clean+dns_ok,2026-11-28,high,Official Reliance Digital store
+11,croma.com,croma.com,Croma,ecommerce,official,1,tranco_rank_7987+threat_feed_clean+dns_ok,2026-11-28,high,Official Croma electronics store
+12,ebay.com,ebay.com,eBay,ecommerce,official,1,tranco_rank_195+threat_feed_clean+dns_ok,2026-11-28,high,Official eBay marketplace
+13,walmart.com,walmart.com,Walmart,ecommerce,official,1,tranco_rank_473+threat_feed_clean+dns_ok,2026-11-28,high,Official Walmart storefront
+14,etsy.com,etsy.com,Etsy,ecommerce,official,1,tranco_rank_341+threat_feed_clean+dns_ok,2026-11-28,high,Official Etsy marketplace
+15,ikea.com,ikea.com,IKEA,ecommerce,official,1,tranco_rank_632+threat_feed_clean+dns_ok,2026-11-28,high,Official IKEA store
+16,apple.com,apple.com,Apple,ecommerce,official,1,tranco_rank_11+threat_feed_clean+dns_ok,2026-11-28,high,Official Apple website
+17,google.com,google.com,Google,productivity,official,1,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,high,Official Google search & portal
+18,google.co.in,google.co.in,Google,productivity,official,1,tranco_rank_1793+threat_feed_clean+dns_ok,2026-11-28,high,Official Google India
+19,mail.google.com,google.com,Google,productivity,official,1,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,high,Official Gmail webmail
+20,youtube.com,youtube.com,YouTube,media,official,1,tranco_rank_10+threat_feed_clean+dns_ok,2026-11-28,high,Official YouTube platform
+21,youtu.be,youtu.be,YouTube,media,official,1,tranco_rank_52+threat_feed_clean+dns_ok,2026-11-28,high,Official YouTube shortener
+22,drive.google.com,google.com,Google,productivity,third_party,2,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,medium,User file sharing host; inspect shared document links
+23,docs.google.com,google.com,Google,productivity,third_party,2,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,medium,User documents/forms host; inspect page content
+24,microsoft.com,microsoft.com,Microsoft,productivity,official,1,tranco_rank_8+threat_feed_clean+dns_ok,2026-11-28,high,Official Microsoft domain
+25,outlook.com,outlook.com,Microsoft,productivity,official,1,tranco_rank_133+threat_feed_clean+dns_ok,2026-11-28,high,Official Outlook webmail
+26,outlook.office.com,office.com,Microsoft,productivity,official,1,tranco_rank_25+threat_feed_clean+dns_ok,2026-11-28,high,Official Microsoft 365 mail
+27,office.com,office.com,Microsoft,productivity,official,1,tranco_rank_25+threat_feed_clean+dns_ok,2026-11-28,high,Official Microsoft Office portal
+28,onedrive.live.com,live.com,Microsoft,productivity,third_party,2,tranco_rank_28+threat_feed_clean+dns_ok,2026-11-28,medium,User cloud storage portal; inspect shared targets
+29,yahoo.com,yahoo.com,Yahoo,productivity,official,1,tranco_rank_72+threat_feed_clean+dns_ok,2026-11-28,high,Official Yahoo portal
+30,proton.me,proton.me,Proton,productivity,official,1,tranco_rank_2677+threat_feed_clean+dns_ok,2026-11-28,high,Official Proton Mail & Privacy
+31,dropbox.com,dropbox.com,Dropbox,productivity,third_party,2,tranco_rank_131+threat_feed_clean+dns_ok,2026-11-28,high,Cloud storage service
+32,notion.so,notion.so,Notion,productivity,third_party,2,tranco_rank_2096+threat_feed_clean+dns_ok,2026-11-28,high,Workspace & docs service
+33,zoom.us,zoom.us,Zoom,productivity,official,1,tranco_rank_58+threat_feed_clean+dns_ok,2026-11-28,high,Official Zoom conferencing
+34,slack.com,slack.com,Slack,productivity,official,1,tranco_rank_275+threat_feed_clean+dns_ok,2026-11-28,high,Official Slack workspace
+35,instagram.com,instagram.com,Instagram,social,official,1,tranco_rank_13+threat_feed_clean+dns_ok,2026-11-28,high,Official Instagram platform
+36,facebook.com,facebook.com,Facebook,social,official,1,tranco_rank_4+threat_feed_clean+dns_ok,2026-11-28,high,Official Facebook platform
+37,whatsapp.com,whatsapp.com,WhatsApp,social,official,1,tranco_rank_66+threat_feed_clean+dns_ok,2026-11-28,high,Official WhatsApp portal
+38,web.whatsapp.com,whatsapp.com,WhatsApp,social,official,1,tranco_rank_66+threat_feed_clean+dns_ok,2026-11-28,high,Official WhatsApp Web
+39,x.com,x.com,X,social,official,1,tranco_rank_47+threat_feed_clean+dns_ok,2026-11-28,high,Official X platform
+40,linkedin.com,linkedin.com,LinkedIn,social,official,1,tranco_rank_16+threat_feed_clean+dns_ok,2026-11-28,high,Official LinkedIn network
+41,reddit.com,reddit.com,Reddit,social,official,1,tranco_rank_111+threat_feed_clean+dns_ok,2026-11-28,high,Official Reddit forum
+42,pinterest.com,pinterest.com,Pinterest,social,official,1,tranco_rank_54+threat_feed_clean+dns_ok,2026-11-28,high,Official Pinterest platform
+43,telegram.org,telegram.org,Telegram,social,official,1,tranco_rank_160+threat_feed_clean+dns_ok,2026-11-28,high,Official Telegram website
+44,web.telegram.org,telegram.org,Telegram,social,official,1,tranco_rank_160+threat_feed_clean+dns_ok,2026-11-28,high,Official Telegram Web
+45,discord.com,discord.com,Discord,social,official,1,tranco_rank_177+threat_feed_clean+dns_ok,2026-11-28,high,Official Discord platform
+46,snapchat.com,snapchat.com,Snapchat,social,official,1,tranco_rank_168+threat_feed_clean+dns_ok,2026-11-28,high,Official Snapchat platform
+47,threads.net,threads.net,Threads,social,official,1,tranco_rank_1786+threat_feed_clean+dns_ok,2026-11-28,high,Official Threads platform
+48,github.com,github.com,GitHub,developer,official,1,tranco_rank_33+threat_feed_clean+dns_ok,2026-11-28,high,Official GitHub platform
+49,gitlab.com,gitlab.com,GitLab,developer,official,1,tranco_rank_400+threat_feed_clean+dns_ok,2026-11-28,high,Official GitLab platform
+50,sbi.co.in,sbi.co.in,SBI,banking,official,1,tranco_rank_58651+threat_feed_clean+dns_ok,2026-11-28,high,Official State Bank of India
+51,onlinesbi.sbi,onlinesbi.sbi,SBI,banking,official,1,tranco_rank_8491+threat_feed_clean+dns_ok,2026-11-28,high,Official OnlineSBI portal
+52,hdfcbank.com,hdfcbank.com,HDFC Bank,banking,official,1,tranco_rank_19694+threat_feed_clean+dns_ok,2026-11-28,high,Official HDFC Bank
+53,icicibank.com,icicibank.com,ICICI Bank,banking,official,1,tranco_rank_15116+threat_feed_clean+dns_ok,2026-11-28,high,Official ICICI Bank
+54,axisbank.com,axisbank.com,Axis Bank,banking,official,1,tranco_rank_25598+threat_feed_clean+dns_ok,2026-11-28,high,Official Axis Bank
+55,kotak.com,kotak.com,Kotak Mahindra,banking,official,1,tranco_rank_42035+threat_feed_clean+dns_ok,2026-11-28,high,Official Kotak Bank
+56,bankofbaroda.in,bankofbaroda.in,Bank of Baroda,banking,official,1,tranco_rank_28586+threat_feed_clean+dns_ok,2026-11-28,high,Official Bank of Baroda
+57,canarabank.in,canarabank.in,Canara Bank,banking,official,3,unverified_candidate,2026-11-28,low,Official Canara Bank
+58,indianbank.in,indianbank.in,Indian Bank,banking,official,1,tranco_rank_69120+threat_feed_clean+dns_ok,2026-11-28,high,Official Indian Bank
+59,rbi.org.in,rbi.org.in,RBI,banking,official,1,tranco_rank_13835+threat_feed_clean+dns_ok,2026-11-28,high,Reserve Bank of India
+60,npci.org.in,npci.org.in,NPCI,banking,official,1,tranco_rank_7511+threat_feed_clean+dns_ok,2026-11-28,high,National Payments Corp of India
+61,phonepe.com,phonepe.com,PhonePe,payment,official,1,tranco_rank_8007+threat_feed_clean+dns_ok,2026-11-28,high,Official PhonePe domain
+62,paytm.com,paytm.com,Paytm,payment,official,1,tranco_rank_8272+threat_feed_clean+dns_ok,2026-11-28,high,Official Paytm domain
+63,pay.google.com,google.com,Google Pay,payment,official,1,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,high,Official Google Pay web portal
+64,razorpay.com,razorpay.com,Razorpay,payment,third_party,2,tranco_rank_3824+threat_feed_clean+dns_ok,2026-11-28,high,Verified third-party payment gateway
+65,cred.club,cred.club,CRED,payment,official,1,tranco_rank_84146+threat_feed_clean+dns_ok,2026-11-28,high,Official CRED fintech platform
+66,nptel.ac.in,nptel.ac.in,NPTEL,education,official,1,tranco_rank_17788+threat_feed_clean+dns_ok,2026-11-28,high,Official NPTEL education portal
+67,swayam.gov.in,swayam.gov.in,SWAYAM,education,official,1,tranco_rank_18998+threat_feed_clean+dns_ok,2026-11-28,high,Official Govt of India SWAYAM
+68,iitm.ac.in,iitm.ac.in,IIT Madras,education,official,1,tranco_rank_17304+threat_feed_clean,2026-11-28,high,Official IIT Madras
+69,iitb.ac.in,iitb.ac.in,IIT Bombay,education,official,1,tranco_rank_25742+threat_feed_clean+dns_ok,2026-11-28,high,Official IIT Bombay
+70,citchennai.edu.in,citchennai.edu.in,CIT Chennai,education,official,1,regulated_tld_registry+threat_feed_clean+dns_ok,2026-11-28,high,Official Chennai Institute of Technology
+71,coursera.org,coursera.org,Coursera,education,official,1,tranco_rank_1255+threat_feed_clean+dns_ok,2026-11-28,high,Official Coursera learning platform
+72,udemy.com,udemy.com,Udemy,education,official,1,tranco_rank_1963+threat_feed_clean+dns_ok,2026-11-28,high,Official Udemy platform
+73,edx.org,edx.org,edX,education,official,1,tranco_rank_3853+threat_feed_clean+dns_ok,2026-11-28,high,Official edX platform
+74,unstop.com,unstop.com,Unstop,jobs,official,1,tranco_rank_8766+threat_feed_clean+dns_ok,2026-11-28,high,Official Unstop careers platform
+75,naukri.com,naukri.com,Naukri,jobs,official,1,tranco_rank_1293+threat_feed_clean+dns_ok,2026-11-28,high,Official Naukri jobs portal
+76,indeed.com,indeed.com,Indeed,jobs,official,1,tranco_rank_442+threat_feed_clean+dns_ok,2026-11-28,high,Official Indeed jobs portal
+77,internshala.com,internshala.com,Internshala,jobs,official,1,tranco_rank_17545+threat_feed_clean+dns_ok,2026-11-28,high,Official Internshala internships
+78,hackerrank.com,hackerrank.com,HackerRank,developer,official,1,tranco_rank_11342+threat_feed_clean+dns_ok,2026-11-28,high,Official HackerRank coding platform
+79,leetcode.com,leetcode.com,LeetCode,developer,official,1,tranco_rank_4428+threat_feed_clean+dns_ok,2026-11-28,high,Official LeetCode platform
+80,stackoverflow.com,stackoverflow.com,Stack Overflow,developer,official,1,tranco_rank_545+threat_feed_clean+dns_ok,2026-11-28,high,Official Stack Overflow
+81,huggingface.co,huggingface.co,Hugging Face,developer,official,1,tranco_rank_982+threat_feed_clean+dns_ok,2026-11-28,high,Official Hugging Face hub
+82,kaggle.com,kaggle.com,Kaggle,developer,official,1,tranco_rank_4597+threat_feed_clean+dns_ok,2026-11-28,high,Official Kaggle platform
+83,irctc.co.in,irctc.co.in,IRCTC,travel,official,1,tranco_rank_6684+threat_feed_clean+dns_ok,2026-11-28,high,Official IRCTC rail booking
+84,makemytrip.com,makemytrip.com,MakeMyTrip,travel,official,1,tranco_rank_1231+threat_feed_clean+dns_ok,2026-11-28,high,Official MakeMyTrip portal
+85,booking.com,booking.com,Booking.com,travel,official,1,tranco_rank_296+threat_feed_clean+dns_ok,2026-11-28,high,Official Booking.com portal
+86,airbnb.com,airbnb.com,Airbnb,travel,official,1,tranco_rank_729+threat_feed_clean+dns_ok,2026-11-28,high,Official Airbnb platform
+87,uber.com,uber.com,Uber,travel,official,1,tranco_rank_689+threat_feed_clean+dns_ok,2026-11-28,high,Official Uber domain
+88,olacabs.com,olacabs.com,Ola,travel,official,1,tranco_rank_38129+threat_feed_clean+dns_ok,2026-11-28,high,Official Ola Cabs domain
+89,zomato.com,zomato.com,Zomato,food,official,1,tranco_rank_4923+threat_feed_clean+dns_ok,2026-11-28,high,Official Zomato food platform
+90,swiggy.com,swiggy.com,Swiggy,food,official,1,tranco_rank_6807+threat_feed_clean+dns_ok,2026-11-28,high,Official Swiggy food platform
+91,netflix.com,netflix.com,Netflix,media,official,1,tranco_rank_40+threat_feed_clean+dns_ok,2026-11-28,high,Official Netflix streaming
+92,spotify.com,spotify.com,Spotify,media,official,1,tranco_rank_76+threat_feed_clean+dns_ok,2026-11-28,high,Official Spotify streaming
+93,primevideo.com,primevideo.com,Prime Video,media,official,1,tranco_rank_669+threat_feed_clean+dns_ok,2026-11-28,high,Official Amazon Prime Video
+94,hotstar.com,hotstar.com,Hotstar,media,official,1,tranco_rank_4080+threat_feed_clean+dns_ok,2026-11-28,high,Official Hotstar streaming
+95,bookmyshow.com,bookmyshow.com,BookMyShow,media,official,1,tranco_rank_1372+threat_feed_clean+dns_ok,2026-11-28,high,Official BookMyShow ticketing
+96,medium.com,medium.com,Medium,third_party_media,third_party,2,tranco_rank_201+threat_feed_clean+dns_ok,2026-11-28,high,Legitimate third-party publishing platform
+97,blogger.com,blogger.com,Blogger,third_party_hosting,third_party,2,tranco_rank_519+threat_feed_clean+dns_ok,2026-11-28,medium,Third-party blogging host; blogs require page inspection
+98,wordpress.com,wordpress.com,WordPress,third_party_hosting,third_party,2,tranco_rank_99+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant WordPress host; inspect individual sites
+99,wix.com,wix.com,Wix,third_party_hosting,third_party,2,tranco_rank_594+threat_feed_clean+dns_ok,2026-11-28,high,Third-party website builder corporate domain
+100,squarespace.com,squarespace.com,Squarespace,third_party_hosting,third_party,2,tranco_rank_585+threat_feed_clean+dns_ok,2026-11-28,high,Third-party website builder corporate domain
+101,github.io,github.io,GitHub Pages,third_party_hosting,third_party,2,tranco_rank_128+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant static site hosting; tenant pages are untrusted by default
+102,vercel.app,vercel.app,Vercel,third_party_hosting,third_party,2,tranco_rank_578+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant app hosting; tenant subdomains require page-level scanning
+103,netlify.app,netlify.app,Netlify,third_party_hosting,third_party,2,tranco_rank_777+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant web hosting; tenant subdomains require page-level scanning
+104,pages.dev,pages.dev,Cloudflare Pages,third_party_hosting,third_party,2,tranco_rank_162+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant pages host; tenant subdomains require page-level scanning
+105,sites.google.com,google.com,Google Sites,third_party_hosting,third_party,2,tranco_rank_1+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant Google Sites host; tenant pages are NOT official Google
+106,canva.com,canva.com,Canva,third_party_saas,third_party,2,tranco_rank_272+threat_feed_clean+dns_ok,2026-11-28,high,Verified third-party design SaaS
+107,bitly.com,bitly.com,Bitly,url_shortener,third_party,2,tranco_rank_3887+threat_feed_clean+dns_ok,2026-11-28,medium,Legitimate URL shortener corporate domain; short links redirect to arbitrary targets
+108,linktr.ee,linktr.ee,Linktree,third_party_saas,third_party,2,tranco_rank_271+threat_feed_clean+dns_ok,2026-11-28,medium,Multi-tenant bio-link service; destination links require inspection
+109,cashfree.com,cashfree.com,Cashfree,payment,third_party,2,tranco_rank_35367+threat_feed_clean+dns_ok,2026-11-28,high,Verified third-party payment gateway
+110,payu.in,payu.in,PayU,payment,third_party,2,tranco_rank_33002+threat_feed_clean+dns_ok,2026-11-28,high,Verified third-party payment processor
+111,stripe.com,stripe.com,Stripe,payment,third_party,2,tranco_rank_224+threat_feed_clean+dns_ok,2026-11-28,high,Verified third-party payment infrastructure
+112,paypal.com,paypal.com,PayPal,payment,third_party,2,tranco_rank_175+threat_feed_clean+dns_ok,2026-11-28,high,Verified payment service provider
+113,bbc.com,bbc.com,BBC,news,third_party,2,tranco_rank_213+threat_feed_clean+dns_ok,2026-11-28,high,Verified international news publisher
+114,reuters.com,reuters.com,Reuters,news,third_party,2,tranco_rank_283+threat_feed_clean+dns_ok,2026-11-28,high,Verified news publisher
+115,thehindu.com,thehindu.com,The Hindu,news,third_party,2,tranco_rank_3044+threat_feed_clean+dns_ok,2026-11-28,high,Verified news publisher

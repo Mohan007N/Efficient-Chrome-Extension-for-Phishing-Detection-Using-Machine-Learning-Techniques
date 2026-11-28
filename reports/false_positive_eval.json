@@ -1,0 +1,365 @@
+{
+  "total_verified_legit_urls_tested": 303,
+  "false_positives_high_critical": 3,
+  "overall_legitimate_fpr": 0.0099,
+  "raw_url_ml_mean_prob_on_legit": 0.0953,
+  "raw_url_ml_exceeded_rate": 0.0297,
+  "amazon_results": [
+    {
+      "url": "https://www.amazon.in/",
+      "url_model_prob": 0.0506,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.in/dp/B0CHWRXH8B/ref=sr_1_1?crid=12345ABC&keywords=wireless+headphones&qid=1700000000&sprefix=wire%2Caps%2C210&sr=8-1",
+      "url_model_prob": 0.0929,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.in/s?k=laptop+stand&i=electronics&crid=2K9P1L3&ref=nb_sb_noss_1",
+      "url_model_prob": 0.0648,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.com/",
+      "url_model_prob": 0.049,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.com/dp/B0CHWRXH8B/ref=sr_1_1?crid=12345ABC&keywords=wireless+headphones&qid=1700000000&sprefix=wire%2Caps%2C210&sr=8-1",
+      "url_model_prob": 0.0673,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.com/s?k=laptop+stand&i=electronics&crid=2K9P1L3&ref=nb_sb_noss_1",
+      "url_model_prob": 0.0484,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.co.uk/",
+      "url_model_prob": 0.001,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.co.uk/dp/B0CHWRXH8B/ref=sr_1_1?crid=12345ABC&keywords=wireless+headphones&qid=1700000000&sprefix=wire%2Caps%2C210&sr=8-1",
+      "url_model_prob": 0.4111,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    },
+    {
+      "url": "https://www.amazon.co.uk/s?k=laptop+stand&i=electronics&crid=2K9P1L3&ref=nb_sb_noss_1",
+      "url_model_prob": 0.1195,
+      "dom_model_prob": 0.2073,
+      "overall_risk_level": "LOW",
+      "prediction_label": "Real (Legitimate)",
+      "false_positive": false
+    }
+  ],
+  "synthetic_lookalikes_detected": 10,
+  "synthetic_lookalikes_total": 10,
+  "synthetic_lookalike_details": [
+    {
+      "url": "https://amaz0n-login.example/signin",
+      "target_brand": "amazon",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://amazon-account-verify.example/auth",
+      "target_brand": "amazon",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://google-account-verify.example/login",
+      "target_brand": "google",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://micros0ft-security.example/alert",
+      "target_brand": "microsoft",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://flipkart-reward-claim.example/claim",
+      "target_brand": "flipkart",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://sbi-netbanking-secure.example/kyc",
+      "target_brand": "onlinesbi",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.0,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://instagram-verify-account.example/appeal",
+      "target_brand": "instagram",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://paypa1-payment.example/checkout",
+      "target_brand": "paypal",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.0,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://phonepe-cashback.example/redeem",
+      "target_brand": "phonepe",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    },
+    {
+      "url": "https://irctc-ticket-confirm.example/tatkal",
+      "target_brand": "irctc",
+      "overall_risk_level": "CRITICAL",
+      "brand_score": 0.95,
+      "detected_as_risky": true
+    }
+  ],
+  "per_category_legit": {
+    "banking": {
+      "samples": 30,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "developer": {
+      "samples": 21,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "ecommerce": {
+      "samples": 48,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "education": {
+      "samples": 24,
+      "false_positives": 3,
+      "fpr": 0.125,
+      "raw_url_ml_exceeded_rate": 0.125
+    },
+    "food": {
+      "samples": 6,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "jobs": {
+      "samples": 12,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "media": {
+      "samples": 21,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "news": {
+      "samples": 9,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "payment": {
+      "samples": 27,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "productivity": {
+      "samples": 42,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0952
+    },
+    "social": {
+      "samples": 39,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0256
+    },
+    "third_party_saas": {
+      "samples": 4,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "travel": {
+      "samples": 18,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.0
+    },
+    "url_shortener": {
+      "samples": 2,
+      "false_positives": 0,
+      "fpr": 0.0,
+      "raw_url_ml_exceeded_rate": 0.5
+    }
+  },
+  "per_category_url_test": {
+    "fake_banking": {
+      "samples": 45,
+      "accuracy": 0.8667,
+      "fpr": null,
+      "recall_phishing": 0.8667
+    },
+    "fake_login": {
+      "samples": 262,
+      "accuracy": 0.958,
+      "fpr": null,
+      "recall_phishing": 0.958
+    },
+    "fake_payment": {
+      "samples": 1,
+      "accuracy": 1.0,
+      "fpr": null,
+      "recall_phishing": 1.0
+    },
+    "http_legitimate": {
+      "samples": 4,
+      "accuracy": 0.0,
+      "fpr": 1.0,
+      "recall_phishing": null
+    },
+    "http_phishing": {
+      "samples": 3058,
+      "accuracy": 1.0,
+      "fpr": null,
+      "recall_phishing": 1.0
+    },
+    "https_legitimate": {
+      "samples": 6668,
+      "accuracy": 0.9807,
+      "fpr": 0.0193,
+      "recall_phishing": null
+    },
+    "https_phishing": {
+      "samples": 1854,
+      "accuracy": 0.8447,
+      "fpr": null,
+      "recall_phishing": 0.8447
+    }
+  },
+  "registry_test_metrics": {
+    "url_risk": {
+      "Positive Class": "0 (Phishing / Malicious)",
+      "Accuracy": 0.9631685166498486,
+      "Phishing Precision": 0.9736529318541997,
+      "Phishing Recall": 0.9415708812260536,
+      "Phishing F1": 0.9573432021815349,
+      "Benign Precision": 0.9554354178842782,
+      "Benign Recall": 0.9800659472422062,
+      "Benign F1": 0.9675939627108612,
+      "Macro F1": 0.962468582446198,
+      "Precision": 0.9736529318541997,
+      "Recall": 0.9415708812260536,
+      "F1 Score": 0.9573432021815349,
+      "ROC AUC": 0.9870629358582099,
+      "PR AUC": 0.9885991964829791,
+      "FPR": 0.019934052757793766,
+      "FNR": 0.05842911877394636,
+      "Confusion Matrix": {
+        "labels": [
+          "0=Phishing",
+          "1=Benign"
+        ],
+        "tp_phishing": 4915,
+        "fn_phishing_as_benign": 305,
+        "fp_benign_as_phishing": 133,
+        "tn_benign": 6539,
+        "matrix": [
+          [
+            4915,
+            305
+          ],
+          [
+            133,
+            6539
+          ]
+        ]
+      },
+      "Threshold": 0.55
+    },
+    "dom_behavior": {
+      "Positive Class": "0 (Phishing / Malicious)",
+      "Accuracy": 0.8729338842975206,
+      "Phishing Precision": 0.9112050739957717,
+      "Phishing Recall": 0.841796875,
+      "Phishing F1": 0.8751269035532995,
+      "Benign Precision": 0.8363636363636363,
+      "Benign Recall": 0.9078947368421053,
+      "Benign F1": 0.8706624605678234,
+      "Macro F1": 0.8728946820605614,
+      "Precision": 0.9112050739957717,
+      "Recall": 0.841796875,
+      "F1 Score": 0.8751269035532995,
+      "ROC AUC": 0.9411792420504387,
+      "PR AUC": 0.9422271850193662,
+      "FPR": 0.09210526315789473,
+      "FNR": 0.158203125,
+      "Confusion Matrix": {
+        "labels": [
+          "0=Phishing",
+          "1=Benign"
+        ],
+        "tp_phishing": 431,
+        "fn_phishing_as_benign": 81,
+        "fp_benign_as_phishing": 42,
+        "tn_benign": 414,
+        "matrix": [
+          [
+            431,
+            81
+          ],
+          [
+            42,
+            414
+          ]
+        ]
+      },
+      "Threshold": 0.65
+    }
+  }
+}

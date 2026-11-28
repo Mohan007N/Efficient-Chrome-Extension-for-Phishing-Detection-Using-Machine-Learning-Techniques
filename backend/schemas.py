@@ -146,6 +146,7 @@ class PredictionResponse(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     reasoning: list[str] = Field(default_factory=list)
     shap_attributions: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     assessment: Optional[dict[str, Any]] = None
 
 
@@ -195,6 +196,7 @@ class WebsiteAssessmentResponse(BaseModel):
     recommended_action: str = ""
     assessment_confidence_note: str = ""
     shap_attributions: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     tranco_rank: Optional[int] = None
     domain_age_days: Optional[int] = None
     registry_match: dict[str, Any] = Field(default_factory=dict)
