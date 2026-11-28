@@ -1,5 +1,5 @@
 """
-backend/schemas.py — Pydantic v2 Request & Response Models for Website Safety API
+backend/schemas.py — Pydantic v2 Request & Response Models for Website Safety API (v3.0)
 """
 
 from __future__ import annotations
@@ -55,13 +55,12 @@ class DOMFeaturesPayload(BaseModel):
     mixed_content_count: int = Field(default=0, ge=0)
     cross_origin_iframes_uninspected: int = Field(default=0, ge=0)
     unavailable_signals: list[str] = Field(default_factory=list)
+    analysis_mode: Optional[str] = Field(default=None, max_length=64)
+    dom_fingerprint: Optional[str] = Field(default=None, max_length=128)
 
 
 class URLFeaturesRequest(BaseModel):
-    """
-    Backward-compatible Chrome Extension /predict payload + optional rich dom_features.
-    All numeric fields have safe defaults.
-    """
+    """Chrome Extension /predict payload with legacy fields + structured dom_features."""
 
     url: str = Field(default="", max_length=2048)
     hostname: str = Field(default="", max_length=512)
@@ -124,15 +123,26 @@ class URLFeaturesRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    """Backward-compatible response extended with multi-dimension Website Safety assessment."""
+    """
+    Assessment response strictly separating calibrated ML phishing_probability (null if unavailable)
+    from heuristic_risk_index and overall_risk_level.
+    """
 
     is_phishing: bool
-    phishing_probability: float
-    legitimate_probability: float
+    phishing_probability: Optional[float] = None
+    legitimate_probability: Optional[float] = None
+    heuristic_risk_index: Optional[int] = None
+    overall_risk_level: str = "UNKNOWN"
+    confidence: float = 0.5
+    operational_status: str = "Unknown"
+    connection_security: str = "UNKNOWN"
+    model_availability: dict[str, Any] = Field(default_factory=dict)
     verdict: str
     risk_level: str
     whitelisted: bool = False
     top_indicators: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    reasoning: list[str] = Field(default_factory=list)
     assessment: Optional[dict[str, Any]] = None
 
 
@@ -140,6 +150,7 @@ class AnalyzeURLRequest(BaseModel):
     url: str = Field(..., min_length=3, max_length=2048)
     fetch_live: bool = Field(default=False, description="Optionally perform SSRF-safe backend HTML fetch")
     deep_scan: bool = Field(default=True, description="Include threat intel, RDAP, and TLS checks")
+    use_playwright: bool = Field(default=False, description="Optionally inspect rendered DOM via SSRF-guarded Playwright")
 
 
 class AnalyzeDOMRequest(BaseModel):
@@ -155,13 +166,20 @@ class AnalyzeWebsiteRequest(BaseModel):
     redirect_chain: list[str] = Field(default_factory=list)
     fetch_live: bool = Field(default=False)
     deep_scan: bool = Field(default=True)
+    use_playwright: bool = Field(default=False)
 
 
 class WebsiteAssessmentResponse(BaseModel):
     url: str
     hostname: str
     overall_risk_level: str
-    heuristic_risk_index: int
+    phishing_probability: Optional[float] = None
+    heuristic_risk_index: Optional[int] = None
+    confidence: float = 0.5
+    operational_status: str = "Unknown"
+    connection_security: str = "UNKNOWN"
+    model_availability: dict[str, Any] = Field(default_factory=dict)
+    analysis_mode: str = "url_only"
     url_model_threat_probability: Optional[float] = None
     dom_model_threat_probability: Optional[float] = None
     verdict: str
@@ -169,6 +187,7 @@ class WebsiteAssessmentResponse(BaseModel):
     dimensions: dict[str, Any] = Field(default_factory=dict)
     brand_impersonation: dict[str, Any] = Field(default_factory=dict)
     evidence: list[str] = Field(default_factory=list)
+    reasoning: list[str] = Field(default_factory=list)
     unavailable_signals: list[str] = Field(default_factory=list)
     recommended_action: str = ""
     assessment_confidence_note: str = ""
@@ -182,7 +201,8 @@ class ExplainRequest(BaseModel):
     hostname: Optional[str] = Field(default="", max_length=512)
     is_phishing: Optional[bool] = Field(default=True)
     risk_level: Optional[str] = Field(default="HIGH")
-    phishing_probability: Optional[float] = Field(default=0.85, ge=0.0, le=1.0)
+    phishing_probability: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    heuristic_risk_index: Optional[int] = Field(default=None, ge=0, le=100)
     features: Optional[dict[str, Any]] = Field(default_factory=dict)
     assessment: Optional[dict[str, Any]] = Field(default=None)
     groq_api_key: Optional[str] = Field(default=None)
@@ -204,6 +224,9 @@ class HealthResponse(BaseModel):
     model_type: str
     feature_count: int
     threat_intel_loaded: bool
+    degraded: bool = False
+    registry_integrity_ok: bool = True
+    model_errors: list[str] = Field(default_factory=list)
 
 
 class VersionResponse(BaseModel):
@@ -218,6 +241,7 @@ class ModelInfoResponse(BaseModel):
     url_feature_count: int
     dom_feature_count: int
     threat_intel_status: dict[str, Any] = Field(default_factory=dict)
+    model_availability: dict[str, Any] = Field(default_factory=dict)
 
 
 class FeedbackRequest(BaseModel):

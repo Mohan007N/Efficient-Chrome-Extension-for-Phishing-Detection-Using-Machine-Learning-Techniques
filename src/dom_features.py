@@ -1,28 +1,31 @@
 """
-src/dom_features.py — Dedicated DOM & HTML Behaviour Feature Extraction Pipeline
+src/dom_features.py — Dedicated DOM & HTML Behaviour Feature Extraction Pipeline (v3.0)
 
 Extracts structured webpage behaviour signals identically from:
 1. Static HTML documents (BeautifulSoup parser — never executes JavaScript)
-2. Live browser DOM telemetry payloads sent by chrome_extension/content.js
+2. Sandboxed headless Playwright rendered DOM snapshots (optional runtime mode)
+3. Live browser DOM telemetry payloads sent by chrome_extension/content.js
 
 Privacy & Modeling Rules:
 - Never reads or stores password values, form input values, cookies, or auth tokens.
 - Cross-origin iframe internals are inaccessible to content scripts and static HTML
   parsers; uninspected cross-origin iframes are explicitly counted and disclosed.
-- DOM indicators alone (a password input, ads, or third-party scripts) are never
-  treated as standalone proof of malicious intent.
+- Static HTML analysis is never misrepresented as complete runtime JS observation.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+import pandas as pd
 
-from src.features import detect_brand_impersonation, extract_root_domain
+from src.features import PROTECTED_BRANDS, detect_brand_impersonation, extract_root_domain, is_hosted_user_content_subdomain
 
+DOM_FEATURE_VERSION = "3.0.0"
 
 # Features passed to Model 2 (DOM Behaviour Classifier)
 DOM_FEATURE_COLUMNS: list[str] = [
@@ -83,7 +86,11 @@ _MISLEADING_CTA_PATTERNS = re.compile(r"(claim\s+now|verify\s+immediately|urgent
 _RESTRICTIVE_REFUND_PATTERNS = re.compile(r"(store\s+credit|wallet\s+credit|credit\s+note\s+only|no\s+refund|non[- ]refundable|no\s+return|final\s+sale)", re.I)
 _PREPAID_PATTERNS = re.compile(r"(upi|razorpay|paytm|cashfree|payu|prepaid|qr\s*code|pay\s+now|credit\s+card|debit\s+card)", re.I)
 _COD_PATTERNS = re.compile(r"(cash\s+on\s+delivery|pay\s+on\s+delivery|\bcod\s+available\b)", re.I)
-_FREE_WEBMAIL_DOMAINS = {"gmail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "proton.me", "protonmail.com"}
+
+
+def compute_content_sha256(html: str) -> str:
+    """Compute SHA-256 content hash for HTML deduplication and dataset provenance."""
+    return hashlib.sha256((html or "").encode("utf-8", errors="ignore")).hexdigest()
 
 
 def _shannon_entropy(text: str) -> float:
@@ -103,57 +110,68 @@ def _safe_soup(html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "html.parser")
 
 
-def extract_dom_features_from_html(url: str, html: str) -> dict:
+def extract_dom_features_from_html(
+    url: str,
+    html: str,
+    analysis_mode: str = "static_html",
+) -> dict:
     """
     Parse raw HTML statically (no script execution) and return standardized DOM features,
-    observability counts, and explicit unavailability disclosures.
+    observability counts, analysis_mode, and explicit unavailability disclosures.
     """
     parsed = urlparse(url or "")
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
     root = extract_root_domain(host)
     is_https = 1 if scheme == "https" else 0
+    user_hosted = is_hosted_user_content_subdomain(host)
 
     if not html or not html.strip():
         empty = {col: 0 for col in DOM_FEATURE_COLUMNS + DOM_OBSERVABILITY_COLUMNS}
-        empty["unavailable_signals"] = ["html_source", "dom_forms", "scripts", "iframes", "redirect_chain", "cert_details"]
+        empty["analysis_mode"] = "unavailable"
+        empty["unavailable_signals"] = [
+            "html_source", "dom_forms", "scripts", "iframes",
+            "runtime_js_behavior", "redirect_chain", "cert_details",
+        ]
         return empty
 
-    soup = _safe_soup(html)
+    soup_full = _safe_soup(html)
     html_lower = html.lower()
     lines = html.splitlines()
 
-    # Title & brand mismatch
-    title_tag = soup.find("title")
+    # Title & domain-title alignment (ignore 'www.' prefix cleanly)
+    title_tag = soup_full.find("title")
     title_raw = re.sub(r"\s+", " ", title_tag.get_text(" ", strip=True)) if title_tag else ""
     has_title = 1 if title_raw else 0
     title_clean = re.sub(r"[^a-z0-9 ]", " ", title_raw.lower())
+    title_compact = title_clean.replace(" ", "")
     title_words = [w for w in title_clean.split() if w]
-    domain_words = [w for w in re.sub(r"[^a-z0-9 ]", " ", host).split() if len(w) > 2]
-    d_matches = sum(1 for w in domain_words if w in title_words or w in title_clean)
+    host_no_www = host[4:] if host.startswith("www.") else host
+    domain_words = [w for w in re.sub(r"[^a-z0-9 ]", " ", host_no_www).split() if len(w) > 2]
+    d_matches = sum(1 for w in domain_words if w in title_words or w in title_clean or w in title_compact)
     domain_title_match_score = round(min(100.0, (d_matches / len(domain_words)) * 100.0), 2) if domain_words else 0.0
 
-    # Body text (safe, static extraction)
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    body_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+    # Body text extracted safely without stripping elements from `soup_full`
+    visible_chunks: list[str] = []
+    for txt_node in soup_full.find_all(string=True):
+        parent_name = getattr(getattr(txt_node, "parent", None), "name", "")
+        if parent_name not in ("script", "style", "noscript"):
+            s_node = str(txt_node).strip()
+            if s_node:
+                visible_chunks.append(s_node)
+    body_text = re.sub(r"\s+", " ", " ".join(visible_chunks)).strip()
     body_lower = body_text.lower()
 
-    # Claimed brand mismatch: check if title or brand text names a protected brand not matching host root
+    # Claimed brand mismatch: check if title names a protected brand not matching official root
     imp_score, matched_brand = detect_brand_impersonation(host)
     brand_domain_mismatch = 1 if (imp_score >= 0.80 and matched_brand) else 0
     if not brand_domain_mismatch and title_raw:
-        # Check if title prominently names a major brand while root domain is unrelated
-        from src.features import PROTECTED_BRANDS
         for brand, official_roots in PROTECTED_BRANDS.items():
-            if len(brand) >= 6 and brand in title_clean and root not in official_roots:
-                # Require additional login/payment context so articles/reviews mentioning Amazon aren't flagged
+            is_official = (not user_hosted) and (root in official_roots or any(host.endswith("." + off) for off in official_roots))
+            if len(brand) >= 6 and brand in title_clean and not is_official:
                 if re.search(r"\b(login|sign\s*in|verify|account|official|checkout|support|kyc)\b", title_clean):
                     brand_domain_mismatch = 1
                     break
-
-    # Re-parse forms/scripts/iframes from intact soup
-    soup_full = _safe_soup(html)
 
     # Group A & B: Forms, credentials, and payment inputs (inspect metadata names/types only, never values)
     forms = soup_full.find_all("form")
@@ -297,7 +315,6 @@ def extract_dom_features_from_html(url: str, html: str) -> dict:
             if lhost and extract_root_domain(lhost) != root:
                 ext_links += 1
         if _FAKE_DOWNLOAD_PATTERNS.search(txt):
-            # External or dummy download links or executable extensions
             if hlow in ("#", "") or hlow.endswith((".exe", ".msi", ".bat", ".scr", ".zip", ".apk")) or (hlow.startswith("http") and extract_root_domain((urlparse(href).hostname or "").lower()) != root):
                 fake_download_button_count += 1
 
@@ -310,11 +327,14 @@ def extract_dom_features_from_html(url: str, html: str) -> dict:
     suspicious_link_ratio = round(susp_links / max(1, total_links), 4)
     external_link_ratio = round(ext_links / max(1, total_links), 4)
 
-    has_copyright_notice = 1 if any(k in html_lower for k in ("©", "&copy;", "copyright", "all rights reserved")) else 0
-    emails = re.findall(r"[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", html_lower)
+    has_copyright_notice = 1 if any(k in html_lower[:60_000] for k in ("©", "&copy;", "copyright", "all rights reserved")) else 0
+    email_search_text = body_lower[:40_000]
+    emails = re.findall(r"\b[a-z0-9._%+-]{1,40}@([a-z0-9-]{1,40}(?:\.[a-z0-9-]{1,24}){1,4})\b", email_search_text)
     has_official_contact_cue = 1 if any(root and (em == root or em.endswith("." + root)) for em in emails) else 0
 
-    unavailable = ["redirect_chain", "cert_details"]
+    unavailable = ["cert_details"]
+    if analysis_mode == "static_html":
+        unavailable.append("runtime_js_behavior (static HTML only)")
     if cross_origin_iframes_uninspected > 0:
         unavailable.append(f"cross_origin_iframe_dom ({cross_origin_iframes_uninspected} frames)")
 
@@ -358,20 +378,35 @@ def extract_dom_features_from_html(url: str, html: str) -> dict:
         "is_https": int(is_https),
         "mixed_content_count": int(mixed_content_count),
         "cross_origin_iframes_uninspected": int(cross_origin_iframes_uninspected),
+        "analysis_mode": analysis_mode,
         "unavailable_signals": unavailable,
     }
 
 
+def validate_dom_feature_schema(features_or_df: dict | pd.DataFrame, expected_columns: list[str] | None = None) -> list[str]:
+    cols = expected_columns or DOM_FEATURE_COLUMNS
+    if isinstance(features_or_df, pd.DataFrame):
+        missing = [c for c in cols if c not in features_or_df.columns]
+        if missing:
+            raise ValueError(f"DOM feature DataFrame missing columns: {missing}")
+        if list(features_or_df[cols].columns) != list(cols):
+            raise ValueError("DOM feature column order mismatch.")
+        return cols
+    missing = [c for c in cols if c not in features_or_df]
+    if missing:
+        raise ValueError(f"DOM feature dict missing columns: {missing}")
+    return cols
+
+
 def normalize_dom_feature_dict(payload: dict, url: str = "") -> dict:
     """
-    Normalize a DOM payload (either rich new dom_features or legacy 46-feature content.js dict)
+    Normalize a DOM payload (either rich dom_features or legacy content.js fields)
     into the exact DOM_FEATURE_COLUMNS + DOM_OBSERVABILITY_COLUMNS schema.
     """
     p = payload or {}
     parsed = urlparse(url or str(p.get("url", "")))
     is_https = int(p.get("is_https", p.get("IsHTTPS", 1 if parsed.scheme == "https" else 0)) or 0)
 
-    # Fallback mapping when legacy extension fields are provided instead of new DOM fields
     has_pwd = int(p.get("HasPasswordField", 0) or 0)
     ext_submit = int(p.get("HasExternalFormSubmit", 0) or 0)
     has_hidden = int(p.get("HasHiddenFields", 0) or 0)
@@ -422,6 +457,7 @@ def normalize_dom_feature_dict(payload: dict, url: str = "") -> dict:
         "is_https": is_https,
         "mixed_content_count": int(p.get("mixed_content_count", 0)),
         "cross_origin_iframes_uninspected": int(p.get("cross_origin_iframes_uninspected", 0)),
+        "analysis_mode": str(p.get("analysis_mode") or "extension_dom"),
         "unavailable_signals": list(p.get("unavailable_signals", [])),
     }
     return out
@@ -481,4 +517,3 @@ def evaluate_credential_and_payment_risk(url: str, dom_feats: dict, brand_info: 
         "payment_risk_score": round(min(1.0, pay_score), 4),
         "payment_evidence": pay_evidence,
     }
-

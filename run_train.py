@@ -1,22 +1,30 @@
 """
-run_train.py — Project launcher script.
+run_train.py — WebShield AI v3.0 Full Training Pipeline Launcher
 
-Run this file from the project root directory to start the full ML training pipeline:
+Runs both separated, leak-free URL and DOM model selection, calibration,
+threshold tuning, untouched test evaluation, and atomic registry promotion:
 
     python run_train.py
-
-This script correctly sets the Python path so that the `src` package
-is found regardless of IDE or terminal configuration.
 """
 
 import os
 import sys
 
-# Add the project root folder to sys.path so `src` is importable
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from src.train import main
+from src.train import main as train_url_main
+from src.train_dom import main as train_dom_main
+
+
+def main():
+    print("=" * 60)
+    print(" WebShield AI v3.0 — URL & DOM Training Pipeline")
+    print("=" * 60)
+    train_url_main()
+    print()
+    train_dom_main()
+
 
 if __name__ == "__main__":
     main()

@@ -60,3 +60,37 @@ def test_www_canonicalization_invariance():
     for col in URL_FEATURE_COLUMNS:
         assert with_www[col] == without_www[col], f"Expected www invariance for {col}"
 
+
+def test_psl_multitenant_and_v3_lexical_features():
+    from src.features import (
+        URL_FEATURE_COLUMNS,
+        extract_domain_parts,
+        extract_root_domain,
+        is_hosted_user_content_subdomain,
+        validate_url_feature_schema,
+    )
+
+    parts_uk = extract_domain_parts("shop.retailer.co.uk")
+    assert parts_uk["suffix"] == "co.uk"
+    assert parts_uk["registered_domain"] == "retailer.co.uk"
+
+    assert extract_root_domain("myphish.vercel.app") == "myphish.vercel.app"
+    assert extract_root_domain("amaz0n-verify-account.invalid") == "amaz0n-verify-account.invalid"
+    assert is_hosted_user_content_subdomain("sites.google.com") is True
+    assert is_hosted_user_content_subdomain("www.google.com") is False
+
+    f_v3 = extract_url_features(
+        "https://user:pass@sub.example.xyz/a/b/c?next=https://evil.invalid&id=1"
+    )
+    assert f_v3["has_userinfo_in_url"] == 1
+    assert f_v3["has_redirect_indicator"] == 1
+    assert f_v3["path_depth"] == 3
+    assert f_v3["num_query_params"] == 2
+    assert f_v3["special_char_ratio"] > 0.0
+    assert validate_url_feature_schema(f_v3, URL_FEATURE_COLUMNS) == list(URL_FEATURE_COLUMNS)
+
+    # Cyrillic homoglyph 'а' (U+0430) in hostname
+    f_homo = extract_url_features("https://аmazon-verify.invalid/login")
+    assert f_homo["has_unicode_homoglyph"] == 1
+
+

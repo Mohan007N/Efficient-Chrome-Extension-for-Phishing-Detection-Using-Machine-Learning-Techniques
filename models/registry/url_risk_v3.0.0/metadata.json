@@ -1,0 +1,222 @@
+{
+  "role": "url_risk",
+  "version": "v3.0.0",
+  "model_type": "CalibratedClassifierCV",
+  "algorithm": "LightGBM",
+  "created_at": "2026-11-28T07:54:59.812963+00:00",
+  "dataset_fingerprint": "7ccf1311750659354d141b77060d306538f091aafdfdcafd46e6c188ce42f5d1",
+  "dataset_source_distribution": {
+    "phiusiil": 38878,
+    "phreshphish": 3970,
+    "openphish": 211,
+    "tranco_vetted": 50,
+    "custom_verified_fixture": 17
+  },
+  "dataset_lineage": {
+    "train_rows": 43126,
+    "val_rows": 9948,
+    "test_rows": 13247,
+    "sources": {
+      "phiusiil": 38878,
+      "phreshphish": 3970,
+      "openphish": 211,
+      "tranco_vetted": 50,
+      "custom_verified_fixture": 17
+    },
+    "split_strategy": "domain_grouped_GroupShuffleSplit_val_only_selection",
+    "dataset_fingerprint": "7ccf1311750659354d141b77060d306538f091aafdfdcafd46e6c188ce42f5d1"
+  },
+  "feature_count": 33,
+  "feature_columns": [
+    "url_length",
+    "domain_length",
+    "path_length",
+    "query_length",
+    "num_subdomains",
+    "num_dots",
+    "num_hyphens_domain",
+    "num_digits_url",
+    "num_digits_domain",
+    "num_special_chars",
+    "special_char_ratio",
+    "is_ip_address",
+    "is_punycode_or_idn",
+    "has_unicode_homoglyph",
+    "has_unusual_port",
+    "has_userinfo_in_url",
+    "has_redirect_indicator",
+    "is_url_shortener",
+    "has_url_obfuscation",
+    "path_depth",
+    "num_query_params",
+    "url_entropy",
+    "domain_entropy",
+    "tld_length",
+    "is_suspicious_tld",
+    "suspicious_keyword_count",
+    "is_https",
+    "brand_similarity_score",
+    "typosquat_edit_distance",
+    "char_continuation_rate",
+    "letter_ratio",
+    "digit_ratio",
+    "tld"
+  ],
+  "class_mapping": {
+    "0": "phishing_malicious",
+    "1": "benign_legitimate"
+  },
+  "model_classes": [
+    0,
+    1
+  ],
+  "threshold": 0.6,
+  "calibrated": true,
+  "validation_metrics": {
+    "Positive Class": "0 (Phishing / Malicious)",
+    "Accuracy": 0.9668275030156815,
+    "Phishing Precision": 0.9779906256368454,
+    "Phishing Recall": 0.955785700059749,
+    "Phishing F1": 0.9667606768734891,
+    "Benign Precision": 0.9559611188256298,
+    "Benign Recall": 0.9780799675258778,
+    "Benign F1": 0.9668940609951846,
+    "Macro F1": 0.9668273689343369,
+    "Precision": 0.9779906256368454,
+    "Recall": 0.955785700059749,
+    "F1 Score": 0.9667606768734891,
+    "ROC AUC": 0.989029878043777,
+    "PR AUC": 0.9909814588144829,
+    "FPR": 0.021920032474122185,
+    "FNR": 0.044214299940250945,
+    "Confusion Matrix": {
+      "labels": [
+        "0=Phishing",
+        "1=Benign"
+      ],
+      "tp_phishing": 4799,
+      "fn_phishing_as_benign": 222,
+      "fp_benign_as_phishing": 108,
+      "tn_benign": 4819,
+      "matrix": [
+        [
+          4799,
+          222
+        ],
+        [
+          108,
+          4819
+        ]
+      ]
+    },
+    "Threshold": 0.6
+  },
+  "test_metrics": {
+    "Positive Class": "0 (Phishing / Malicious)",
+    "Accuracy": 0.96753982033668,
+    "Phishing Precision": 0.9788089713843774,
+    "Phishing Recall": 0.9557468660323214,
+    "Phishing F1": 0.967140455448571,
+    "Benign Precision": 0.9567974048953111,
+    "Benign Recall": 0.9793238756414127,
+    "Benign F1": 0.9679295942720764,
+    "Macro F1": 0.9675350248603236,
+    "Precision": 0.9788089713843774,
+    "Recall": 0.9557468660323214,
+    "F1 Score": 0.967140455448571,
+    "ROC AUC": 0.9890634980312394,
+    "PR AUC": 0.9908753648154079,
+    "FPR": 0.020676124358587383,
+    "FNR": 0.0442531339676786,
+    "Confusion Matrix": {
+      "labels": [
+        "0=Phishing",
+        "1=Benign"
+      ],
+      "tp_phishing": 6328,
+      "fn_phishing_as_benign": 293,
+      "fp_benign_as_phishing": 137,
+      "tn_benign": 6489,
+      "matrix": [
+        [
+          6328,
+          293
+        ],
+        [
+          137,
+          6489
+        ]
+      ]
+    },
+    "Threshold": 0.6
+  },
+  "metrics": {
+    "Positive Class": "0 (Phishing / Malicious)",
+    "Accuracy": 0.96753982033668,
+    "Phishing Precision": 0.9788089713843774,
+    "Phishing Recall": 0.9557468660323214,
+    "Phishing F1": 0.967140455448571,
+    "Benign Precision": 0.9567974048953111,
+    "Benign Recall": 0.9793238756414127,
+    "Benign F1": 0.9679295942720764,
+    "Macro F1": 0.9675350248603236,
+    "Precision": 0.9788089713843774,
+    "Recall": 0.9557468660323214,
+    "F1 Score": 0.967140455448571,
+    "ROC AUC": 0.9890634980312394,
+    "PR AUC": 0.9908753648154079,
+    "FPR": 0.020676124358587383,
+    "FNR": 0.0442531339676786,
+    "Confusion Matrix": {
+      "labels": [
+        "0=Phishing",
+        "1=Benign"
+      ],
+      "tp_phishing": 6328,
+      "fn_phishing_as_benign": 293,
+      "fp_benign_as_phishing": 137,
+      "tn_benign": 6489,
+      "matrix": [
+        [
+          6328,
+          293
+        ],
+        [
+          137,
+          6489
+        ]
+      ]
+    },
+    "Threshold": 0.6
+  },
+  "training_config": {
+    "cv": "StratifiedGroupKFold(3)",
+    "calibration": "sigmoid(cv=3)",
+    "threshold_rule": "validation_grid_search_pos_class=0(min_recall>=0.92, max_fpr<=0.06)"
+  },
+  "library_versions": {
+    "scikit-learn": "1.9.1",
+    "xgboost": "3.2.0",
+    "lightgbm": "4.7.0",
+    "pandas": "3.0.6",
+    "numpy": "2.4.6",
+    "joblib": "1.6.0",
+    "tldextract": "5.4.0",
+    "shap": "0.51.0",
+    "python": "3.11.0"
+  },
+  "sha256_checksums": {
+    "model": "7dd56fc6d7813c53d57189dd1d4e583738347ac4a43faca5e65dfc69d36d3614",
+    "feature_columns": "39355be4fd10d1905cfa1a49b4e74fc0964e60a3dfb9243fe77ffedcecb13288",
+    "encoders": "a2ca0cc7b5259c709f5f0ed15283e1a3880d32474e6426855f904d57be393a0b"
+  },
+  "active_filenames": {
+    "model": "url_model.pkl",
+    "feature_columns": "url_feature_columns.pkl",
+    "encoders": "url_encoders.pkl"
+  },
+  "promotion_passed": true,
+  "promotion_gate_notes": [
+    "All validation and held-out test security gates passed."
+  ]
+}

@@ -1,24 +1,35 @@
 """
-src/features.py — Separated URL & Brand Feature Engineering Pipeline
+src/features.py — Separated URL & Brand Feature Engineering Pipeline (v3.0)
 
 Provides:
-1. URL normalization and URL-only feature extraction (`URL_FEATURE_COLUMNS`, `extract_url_features`,
-   `extract_url_features_batch`) for Model 1 (URL Risk Classifier).
-2. Brand impersonation & typosquatting analysis (`compute_brand_impersonation_details`,
-   `detect_brand_impersonation`) for Model 3 (Brand Impersonation Detector).
-3. Legacy compatibility helpers (`ENGINEERED_FEATURE_COLUMNS`, `engineer_features`) preserved
-   for backward-compatible callers.
+1. Public Suffix List (PSL) domain parsing via `tldextract` (offline bundled snapshot;
+   no network fetches during inference) so multi-part suffixes and multi-tenant hosting
+   domains are parsed accurately.
+2. URL normalization and URL-only feature extraction (`URL_FEATURE_COLUMNS`,
+   `extract_url_features`, `extract_url_features_batch`, `validate_url_feature_schema`)
+   for Model 1 (URL Risk Classifier).
+3. Brand impersonation, Punycode/IDN & homoglyph detection (`compute_brand_impersonation_details`,
+   `detect_brand_impersonation`) for Model 3.
+4. Legacy compatibility helpers (`ENGINEERED_FEATURE_COLUMNS`, `engineer_features`).
 """
 
 from __future__ import annotations
 
 import math
 import re
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import numpy as np
 import pandas as pd
 
+try:
+    import tldextract
+    _PSL_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
+except Exception:
+    _PSL_EXTRACTOR = None
+
+
+URL_FEATURE_VERSION = "3.0.0"
 
 SUSPICIOUS_COMMERCE_TLDS: set[str] = {
     "xyz", "top", "work", "tk", "ml", "cf", "gq", "ga", "buzz", "cc",
@@ -43,6 +54,17 @@ SCAM_DOMAIN_KEYWORDS: tuple[str, ...] = (
     "track", "kyc", "update", "login", "signin", "auth", "wallet",
     "portal", "official", "service", "customercare", "care", "account",
 )
+
+# Multi-tenant user-content hosting subdomains that must NEVER inherit trust or official brand status
+HOSTED_USER_CONTENT_SUBDOMAINS: set[str] = {
+    "sites.google.com",
+    "docs.google.com",
+    "drive.google.com",
+    "storage.googleapis.com",
+    "script.google.com",
+    "colab.research.google.com",
+    "firebasestorage.googleapis.com",
+}
 
 PROTECTED_BRANDS: dict[str, set[str]] = {
     "amazon": {"amazon.com", "amazon.in", "amazon.co.uk", "amazon.de", "amazon.ca", "amazon.jp", "amazonaws.com"},
@@ -82,7 +104,7 @@ PROTECTED_BRANDS: dict[str, set[str]] = {
     "samsung": {"samsung.com"},
     "netflix": {"netflix.com"},
     "microsoft": {"microsoft.com", "live.com", "outlook.com", "office.com", "microsoftonline.com"},
-    "google": {"google.com", "google.co.in", "accounts.google.com", "drive.google.com"},
+    "google": {"google.com", "google.co.in", "accounts.google.com"},
     "facebook": {"facebook.com", "fb.com", "meta.com"},
     "instagram": {"instagram.com"},
     "whatsapp": {"whatsapp.com", "whatsapp.net"},
@@ -91,10 +113,9 @@ PROTECTED_BRANDS: dict[str, set[str]] = {
     "coinbase": {"coinbase.com"},
     "ebay": {"ebay.com"},
     "walmart": {"walmart.com"},
-    "shopify": {"shopify.com", "myshopify.com"},
+    "shopify": {"shopify.com"},
     "adidas": {"adidas.com", "adidas.co.in"},
     "nike": {"nike.com"},
-    "vlebazaar": {"vlebazaar.in"},
 }
 
 TRUSTED_DOMAINS: set[str] = {
@@ -138,7 +159,7 @@ TRUSTED_DOMAINS: set[str] = {
     "ndtv.com", "thehindu.com", "indiatoday.in",
 }
 
-# Pure URL-only feature schema for Model 1 (strictly decoupled from DOM)
+# Pure URL-only feature schema for Model 1 (33 columns; strictly decoupled from DOM)
 URL_FEATURE_COLUMNS: list[str] = [
     "url_length",
     "domain_length",
@@ -150,11 +171,17 @@ URL_FEATURE_COLUMNS: list[str] = [
     "num_digits_url",
     "num_digits_domain",
     "num_special_chars",
+    "special_char_ratio",
     "is_ip_address",
     "is_punycode_or_idn",
+    "has_unicode_homoglyph",
     "has_unusual_port",
+    "has_userinfo_in_url",
+    "has_redirect_indicator",
     "is_url_shortener",
     "has_url_obfuscation",
+    "path_depth",
+    "num_query_params",
     "url_entropy",
     "domain_entropy",
     "tld_length",
@@ -186,26 +213,56 @@ ENGINEERED_FEATURE_COLUMNS: list[str] = [
 _DELEET_TABLE = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t"})
 _ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _KEYWORD_RE = re.compile("|".join(re.escape(k) for k in SCAM_DOMAIN_KEYWORDS), re.I)
+_REDIRECT_PARAM_KEYS = {"redirect", "redirect_url", "redirect_uri", "next", "url", "redir", "dest", "destination", "return", "return_to", "continue", "goto", "target"}
+
+
+def is_hosted_user_content_subdomain(hostname: str) -> bool:
+    """Return True if host is a multi-tenant user-content hosting subdomain."""
+    h = (hostname or "").lower().strip().rstrip(".")
+    return h in HOSTED_USER_CONTENT_SUBDOMAINS
+
+
+def extract_domain_parts(hostname: str) -> dict[str, str]:
+    """
+    Parse hostname using Public Suffix List (`tldextract` offline snapshot).
+    Returns normalized subdomain, registered domain (`top_domain_under_public_suffix`),
+    domain label, and public suffix.
+    """
+    if not hostname:
+        return {"hostname": "", "subdomain": "", "domain": "", "suffix": "", "registered_domain": ""}
+    host = hostname.lower().strip().rstrip(".")
+    if ":" in host and not host.startswith("["):
+        host = host.split(":", 1)[0]
+    clean_ip = host.strip("[]")
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", clean_ip) or ":" in clean_ip:
+        return {"hostname": clean_ip, "subdomain": "", "domain": clean_ip, "suffix": "", "registered_domain": clean_ip}
+
+    if _PSL_EXTRACTOR is not None:
+        ext = _PSL_EXTRACTOR(host)
+        if ext.suffix:
+            reg = (ext.top_domain_under_public_suffix or ext.domain or host).lower()
+            sub = (ext.subdomain or "").lower()
+            if sub == "www":
+                sub = ""
+            elif sub.startswith("www."):
+                sub = sub[4:]
+            return {
+                "hostname": host,
+                "subdomain": sub,
+                "domain": (ext.domain or "").lower(),
+                "suffix": ext.suffix.lower(),
+                "registered_domain": reg,
+            }
+
+    # Fallback for non-PSL suffixes (e.g. RFC-2606 .invalid/.test/.local) or offline fallback
+    parts = [p for p in (host[4:] if host.startswith("www.") else host).split(".") if p]
+    reg = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    return {"hostname": host, "subdomain": ".".join(parts[:-2]), "domain": parts[-2] if len(parts) >= 2 else host, "suffix": parts[-1] if len(parts) > 1 else "", "registered_domain": reg}
 
 
 def extract_root_domain(hostname: str) -> str:
-    """Extract normalized root domain (e.g. 'www.amazon.in' -> 'amazon.in')."""
-    if not hostname:
-        return ""
-    host = hostname.lower().strip().rstrip(".")
-    if ":" in host:
-        host = host.split(":", 1)[0]
-    if host.startswith("www."):
-        host = host[4:]
-    parts = [p for p in host.split(".") if p]
-    if not parts:
-        return ""
-    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", host):
-        return host
-    compound_second_level = {"co", "com", "net", "org", "gov", "edu", "ac"}
-    if len(parts) >= 3 and parts[-2] in compound_second_level and len(parts[-1]) == 2:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+    """Extract PSL registered root domain (e.g. 'shop.aurora.co.jp' -> 'aurora.co.jp')."""
+    return extract_domain_parts(hostname)["registered_domain"]
 
 
 def normalize_url(url: str) -> str:
@@ -213,7 +270,7 @@ def normalize_url(url: str) -> str:
     raw = (url or "").strip()
     if not raw:
         return ""
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", raw):
+    if "://" not in raw and not raw.lower().startswith(("file:", "javascript:", "data:", "vbscript:")):
         raw = f"https://{raw}"
     parsed = urlparse(raw)
     scheme = (parsed.scheme or "https").lower()
@@ -270,12 +327,13 @@ def detect_brand_impersonation(hostname: str) -> tuple[float, str | None]:
         return 0.0, None
 
     host = hostname.lower().strip().rstrip(".")
-    if ":" in host:
+    if ":" in host and not host.startswith("["):
         host = host.split(":", 1)[0]
     root = extract_root_domain(host)
     if not root:
         return 0.0, None
 
+    user_hosted = is_hosted_user_content_subdomain(host)
     deleet = host.translate(_DELEET_TABLE)
     labels = [p for p in re.split(r"[.\-_]+", host) if p]
     deleet_labels = [p for p in re.split(r"[.\-_]+", deleet) if p]
@@ -285,7 +343,9 @@ def detect_brand_impersonation(hostname: str) -> tuple[float, str | None]:
         matched_brand: str | None = None
         for brand in _BRAND_KEYS:
             official_roots = PROTECTED_BRANDS[brand]
-            if root in official_roots or any(host.endswith("." + off) for off in official_roots):
+            if not user_hosted and (root in official_roots or any(host.endswith("." + off) for off in official_roots)):
+                continue
+            if user_hosted and brand == "google":
                 continue
             if brand in host or brand in deleet:
                 score = 0.95 if (brand in labels or brand in deleet_labels) else 0.85
@@ -309,19 +369,21 @@ def detect_brand_impersonation(hostname: str) -> tuple[float, str | None]:
 def compute_brand_impersonation_details(hostname: str, claimed_brand_text: str = "") -> dict:
     """
     Model 3: Brand Impersonation Detector.
-    Combines edit distance, character homoglyphs, Punycode/IDN checks, and
-    claimed-brand vs. root-domain mismatch without flagging official domains
-    or treating a brand mention alone as proof.
+    Combines edit distance, character/Unicode homoglyphs, Punycode/IDN checks, and
+    claimed-brand vs. PSL root-domain mismatch without flagging official domains.
     """
     host = (hostname or "").lower().strip().rstrip(".")
-    if ":" in host:
+    if ":" in host and not host.startswith("["):
         host = host.split(":", 1)[0]
     root = extract_root_domain(host)
+    user_hosted = is_hosted_user_content_subdomain(host)
 
-    is_punycode = 1 if ("xn--" in host or any(ord(c) > 127 for c in host)) else 0
-    has_homoglyph = 1 if (host != host.translate(_DELEET_TABLE) and detect_brand_impersonation(host)[0] >= 0.80) else 0
-
+    has_non_ascii = any(ord(c) > 127 for c in host)
+    is_punycode = 1 if ("xn--" in host or has_non_ascii) else 0
     score, matched_brand = detect_brand_impersonation(host)
+    has_leet_homoglyph = host != host.translate(_DELEET_TABLE) and score >= 0.80
+    has_homoglyph = 1 if (has_non_ascii or has_leet_homoglyph) else 0
+
     edit_dist = 99
     if matched_brand:
         primary_label = root.split(".")[0]
@@ -337,7 +399,8 @@ def compute_brand_impersonation_details(hostname: str, claimed_brand_text: str =
     if claimed_brand_text:
         ct = re.sub(r"[^a-z0-9 ]", " ", claimed_brand_text.lower())
         for brand, official_roots in PROTECTED_BRANDS.items():
-            if len(brand) >= 6 and brand in ct and root not in official_roots and not any(host.endswith("." + off) for off in official_roots):
+            is_official = (not user_hosted) and (root in official_roots or any(host.endswith("." + off) for off in official_roots))
+            if len(brand) >= 6 and brand in ct and not is_official:
                 claimed_mismatch = 1
                 claimed_brand = brand
                 break
@@ -348,11 +411,10 @@ def compute_brand_impersonation_details(hostname: str, claimed_brand_text: str =
     if is_punycode:
         evidence.append("Domain uses Punycode (xn--) or non-ASCII internationalized characters.")
     if has_homoglyph:
-        evidence.append("Domain contains lookalike digit/character substitutions matching a known brand.")
+        evidence.append("Domain contains Unicode/digit lookalike homoglyph substitutions.")
     if claimed_mismatch and claimed_brand:
         evidence.append(f"Page title/metadata references '{claimed_brand}' while hosted on '{root}'.")
 
-    # Never mark claimed brand mention alone as definitive high risk without corroboration
     effective_score = score
     if claimed_mismatch and effective_score == 0.0:
         effective_score = 0.35
@@ -371,34 +433,53 @@ def compute_brand_impersonation_details(hostname: str, claimed_brand_text: str =
 def extract_url_features(url: str) -> dict:
     """
     Extract the standardized URL-only feature dictionary for a single URL.
-    Canonicalizes leading 'www.' prior to lexical computation so classifiers do
-    not overfit to 'www.' dataset collection artifacts (e.g., PhiUSIIL benign crawls).
+    Uses PSL parsing (`tldextract`) and canonicalizes leading 'www.' prior to lexical
+    computation so classifiers do not overfit to dataset crawl prefixes.
     """
     raw = (url or "").strip()
-    if raw and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", raw):
+    if raw and "://" not in raw and not raw.lower().startswith(("file:", "javascript:", "data:", "vbscript:")):
         raw = f"https://{raw}"
     parsed = urlparse(raw)
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower().strip().rstrip(".")
-    root = extract_root_domain(host)
+    dom_parts = extract_domain_parts(host)
+    root = dom_parts["registered_domain"]
 
     # Strip leading 'www.' strictly for lexical calculation (keep real host/url in metadata)
     host_lex = host[4:] if host.startswith("www.") else host
     raw_lex = re.sub(r"^(https?://)www\.", r"\1", raw, flags=re.I)
 
-    parts = [p for p in host_lex.split(".") if p]
-    tld = parts[-1] if len(parts) > 1 else "com"
-    num_subdomains = max(0, len(parts) - 2)
-    is_ip = 1 if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", host) or (":" in host and "[" in (parsed.netloc or "")) else 0
-    is_punycode = 1 if ("xn--" in host or any(ord(c) > 127 for c in host)) else 0
+    suffix = dom_parts["suffix"]
+    tld = suffix.split(".")[-1] if suffix else (host_lex.split(".")[-1] if "." in host_lex else "com")
+    sub_parts = [p for p in dom_parts["subdomain"].split(".") if p]
+    num_subdomains = len(sub_parts)
 
-    port = parsed.port
+    clean_ip = host.strip("[]")
+    is_ip = 1 if (re.match(r"^(\d{1,3}\.){3}\d{1,3}$", clean_ip) or (":" in clean_ip and "[" in (parsed.netloc or ""))) else 0
+    has_non_ascii = any(ord(c) > 127 for c in host)
+    is_punycode = 1 if ("xn--" in host or has_non_ascii) else 0
+
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
     has_unusual_port = 1 if (port is not None and port not in (80, 443)) else 0
     is_shortener = 1 if (host in URL_SHORTENER_DOMAINS or root in URL_SHORTENER_DOMAINS) else 0
 
+    has_userinfo = 1 if (parsed.username or parsed.password or "@" in (parsed.netloc or "")) else 0
     pct_enc = len(re.findall(r"%[0-9a-fA-F]{2}", raw))
-    has_at_trick = 1 if "@" in (parsed.netloc or "") else 0
-    has_obf = 1 if (pct_enc > 0 or has_at_trick) else 0
+    has_obf = 1 if (pct_enc > 0 or has_userinfo) else 0
+
+    query_str = parsed.query or ""
+    path_str = parsed.path or ""
+    q_params = parse_qs(query_str, keep_blank_values=True)
+    has_redirect_ind = 1 if (
+        any(k.lower() in _REDIRECT_PARAM_KEYS for k in q_params)
+        or "http://" in query_str.lower()
+        or "https://" in query_str.lower()
+        or "http://" in path_str.lower()
+        or "https://" in path_str.lower()
+    ) else 0
 
     url_len = len(raw_lex)
     letters = len(re.findall(r"[a-zA-Z]", raw_lex))
@@ -408,6 +489,7 @@ def extract_url_features(url: str) -> dict:
     cont_cnt = sum(1 for i in range(1, url_len) if raw_lex[i] == raw_lex[i - 1])
     char_cont = cont_cnt / (url_len - 1) if url_len > 1 else 0.0
 
+    path_segs = [s for s in path_str.split("/") if s]
     brand_info = compute_brand_impersonation_details(host)
     kw_count = len(_KEYWORD_RE.findall(raw_lex))
 
@@ -415,21 +497,28 @@ def extract_url_features(url: str) -> dict:
         "url": raw,
         "domain": host,
         "root_domain": root,
+        "public_suffix": suffix or tld,
         "url_length": int(url_len),
         "domain_length": int(len(host_lex)),
-        "path_length": int(len(parsed.path or "")),
-        "query_length": int(len(parsed.query or "")),
+        "path_length": int(len(path_str)),
+        "query_length": int(len(query_str)),
         "num_subdomains": int(num_subdomains),
         "num_dots": int(raw_lex.count(".")),
         "num_hyphens_domain": int(host_lex.count("-")),
         "num_digits_url": int(digits_url),
         "num_digits_domain": int(digits_dom),
         "num_special_chars": int(special_chars),
+        "special_char_ratio": round(special_chars / url_len, 6) if url_len else 0.0,
         "is_ip_address": int(is_ip),
         "is_punycode_or_idn": int(is_punycode),
+        "has_unicode_homoglyph": int(brand_info["has_homoglyph"]),
         "has_unusual_port": int(has_unusual_port),
+        "has_userinfo_in_url": int(has_userinfo),
+        "has_redirect_indicator": int(has_redirect_ind),
         "is_url_shortener": int(is_shortener),
         "has_url_obfuscation": int(has_obf),
+        "path_depth": int(len(path_segs)),
+        "num_query_params": int(len(q_params)),
         "url_entropy": round(_shannon_entropy(raw_lex), 4),
         "domain_entropy": round(_shannon_entropy(host_lex), 4),
         "tld_length": int(len(tld)),
@@ -444,6 +533,22 @@ def extract_url_features(url: str) -> dict:
         "tld": tld,
         "matched_brand": brand_info["matched_brand"],
     }
+
+
+def validate_url_feature_schema(features_or_df: dict | pd.DataFrame, expected_columns: list[str] | None = None) -> list[str]:
+    """Validate URL feature order, presence, and absence of non-finite values."""
+    cols = expected_columns or URL_FEATURE_COLUMNS
+    if isinstance(features_or_df, pd.DataFrame):
+        missing = [c for c in cols if c not in features_or_df.columns]
+        if missing:
+            raise ValueError(f"URL feature DataFrame missing columns: {missing}")
+        if list(features_or_df[cols].columns) != list(cols):
+            raise ValueError("URL feature column order mismatch.")
+        return cols
+    missing = [c for c in cols if c not in features_or_df]
+    if missing:
+        raise ValueError(f"URL feature dict missing columns: {missing}")
+    return cols
 
 
 def extract_url_features_batch(urls: pd.Series | list[str]) -> pd.DataFrame:

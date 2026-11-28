@@ -1,13 +1,12 @@
 """
-backend/explainer.py — Multi-Layer Explainable AI (XAI) & SHAP Attribution Engine
+backend/explainer.py — Multi-Layer Explainable AI (XAI) & SHAP Attribution Engine (v3.0)
 
 Combines:
-1. SHAP (TreeExplainer) / feature-importance attributions from URL & DOM models
-2. Dimension-specific rule explanations (Credential, Payment, Malware, Deceptive, Transport, Brand)
-3. Threat intelligence evidence
-4. Optional Groq LLM synthesis (falls back cleanly to structured deterministic explanations)
-
-Rule compliance: Never presents statistical correlation as definitive proof of malicious intent.
+1. Calibrated-wrapper-aware SHAP (TreeExplainer) / feature-importance attributions resolved strictly
+   via `model.classes_` (`0 = Phishing/Malicious`, `1 = Benign/Legitimate`).
+2. Dimension-specific rule explanations (Credential, Payment, Malware, Deceptive, Transport, Brand).
+3. Threat intelligence evidence & separated ML probability vs heuristic risk index disclosure.
+4. Optional Groq LLM synthesis with deterministic fallback.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ import urllib.request
 
 from dotenv import load_dotenv
 
+from src.evaluate import resolve_class_indices
 from src.features import SUSPICIOUS_COMMERCE_TLDS, detect_brand_impersonation
 
 load_dotenv(override=True)
@@ -36,27 +36,48 @@ except ImportError:
     SHAP_AVAILABLE = False
 
 
+def _unwrap_calibrated_or_pipeline_estimator(model):
+    """Extract underlying fitted estimator from CalibratedClassifierCV or sklearn Pipeline if wrapped."""
+    inner = model
+    if hasattr(inner, "calibrated_classifiers_") and inner.calibrated_classifiers_:
+        cc = inner.calibrated_classifiers_[0]
+        if hasattr(cc, "estimator") and cc.estimator is not None:
+            inner = cc.estimator
+        elif hasattr(cc, "base_estimator") and cc.base_estimator is not None:
+            inner = cc.base_estimator
+    if hasattr(inner, "named_steps") and inner.named_steps:
+        last_step = list(inner.named_steps.values())[-1]
+        inner = last_step
+    return inner
+
+
 def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
     """
-    Compute top SHAP feature contributions toward threat risk (class 0) for a single-row DataFrame.
-    Gracefully falls back to model feature_importances_ or empty list on unsupported estimators.
+    Compute top SHAP feature contributions toward threat risk (`0 = Phishing/Malicious`) for a single row.
+    Unwraps `CalibratedClassifierCV` cleanly and respects `model.classes_` sign conventions.
     """
     if model is None or X_row is None or getattr(X_row, "empty", True):
         return []
 
+    try:
+        phish_idx, _ = resolve_class_indices(model)
+    except Exception:
+        phish_idx = 0
+
+    base_model = _unwrap_calibrated_or_pipeline_estimator(model)
     cols = list(X_row.columns)
+
     if SHAP_AVAILABLE:
         try:
-            explainer = shap.TreeExplainer(model)
+            explainer = shap.TreeExplainer(base_model)
             sv = explainer.shap_values(X_row)
-            # Handle binary / multi-output SHAP shapes safely
             if isinstance(sv, list):
-                vals = sv[0][0]
+                vals = sv[phish_idx][0]
             elif getattr(sv, "ndim", 0) == 3:
-                vals = sv[0, :, 0]
+                vals = sv[0, :, phish_idx]
             elif getattr(sv, "ndim", 0) == 2:
-                # Some tree explainers output log-odds for class 1 (benign) -> invert sign for risk contribution
-                vals = -sv[0]
+                # 2D binary TreeExplainer returns log-odds for positive class `1` (benign) -> invert for class 0 if phish_idx == 0
+                vals = -sv[0] if phish_idx == 0 else sv[0]
             else:
                 vals = sv
             pairs = []
@@ -73,8 +94,8 @@ def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
         except Exception as e:
             logger.debug(f"SHAP TreeExplainer skipped: {e}")
 
-    if hasattr(model, "feature_importances_"):
-        importances = model.feature_importances_
+    if hasattr(base_model, "feature_importances_"):
+        importances = base_model.feature_importances_
         ranked = sorted(
             zip(cols, importances, X_row.iloc[0].tolist()),
             key=lambda t: float(t[1]),
@@ -126,7 +147,7 @@ def extract_top_indicators(
             if is_phishing or risk_level in ("HIGH", "CRITICAL"):
                 indicators.append(f"Elevated multi-factor risk patterns observed ({risk_level} risk).")
             else:
-                indicators.append("No high-risk URL, credential, payment, or threat-feed indicators observed.")
+                indicators.append("No suspicious indicators observed across checked dimensions.")
     return indicators
 
 
@@ -134,12 +155,13 @@ def build_analysis_prompt(
     url: str,
     hostname: str,
     risk_level: str,
-    phishing_prob: float,
+    phishing_prob: float | None,
     indicators: list[str],
     assessment: dict | None = None,
     attributions: list[dict] | None = None,
+    heuristic_risk_index: int | None = None,
 ) -> str:
-    """Build an accurate, non-hyperbolic cybersecurity explanation prompt for Groq AI."""
+    """Build an accurate, evidence-based cybersecurity explanation prompt for Groq AI."""
     ind_txt = "\n".join(f"- {x}" for x in indicators) if indicators else "- No strong risk signals detected."
     dims_txt = ""
     if assessment and assessment.get("dimensions"):
@@ -154,11 +176,16 @@ def build_analysis_prompt(
             for a in attributions[:5]
         )
 
+    prob_str = f"{phishing_prob:.2%}" if phishing_prob is not None else "Unavailable (not computed)"
+    h_idx = heuristic_risk_index if heuristic_risk_index is not None else (assessment or {}).get("heuristic_risk_index")
+    h_str = f"{h_idx}/100" if h_idx is not None else "Unavailable"
+
     return (
         "You are a Cybersecurity Safety Analyst writing a clear, factual website risk briefing.\n"
         "Never claim statistical correlation proves malicious intent; cite only observed evidence.\n\n"
         f"URL: {url}\nHostname: {hostname}\nOverall Risk Level: {risk_level}\n"
-        f"Heuristic Risk Index: {round(phishing_prob * 100, 1)}/100\n"
+        f"Calibrated ML Phishing Probability: {prob_str}\n"
+        f"Heuristic Risk Index: {h_str}\n"
         f"{dims_txt}\n{attr_txt}\n\nObserved Evidence:\n{ind_txt}\n\n"
         "Provide:\n"
         "1. **Assessment Summary** (1-2 concise sentences explaining why the risk level was assigned)\n"
@@ -174,7 +201,7 @@ def call_groq_ai(prompt: str, api_key: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
-        "User-Agent": "PhishGuard-AI/2.0",
+        "User-Agent": "WebShield-AI/3.0",
     }
     last_error = None
     for model in models:
@@ -215,11 +242,12 @@ def generate_explanation(
     hostname: str,
     is_phishing: bool,
     risk_level: str,
-    phishing_prob: float,
+    phishing_prob: float | None,
     features_dict: dict,
     api_key: str | None = None,
     assessment: dict | None = None,
     attributions: list[dict] | None = None,
+    heuristic_risk_index: int | None = None,
 ) -> dict:
     """Generate human-readable multi-layer explanation with SHAP/feature attributions and Groq fallback."""
     backend_inds = (assessment or {}).get("evidence") or (features_dict.get("_backend_indicators") if isinstance(features_dict, dict) else None)
@@ -229,7 +257,16 @@ def generate_explanation(
     key = (api_key or os.getenv("GROQ_API_KEY") or DEFAULT_GROQ_KEY or "").strip()
     if key:
         try:
-            prompt = build_analysis_prompt(url, hostname, risk_level, phishing_prob, indicators, assessment, attr_list)
+            prompt = build_analysis_prompt(
+                url,
+                hostname,
+                risk_level,
+                phishing_prob,
+                indicators,
+                assessment,
+                attr_list,
+                heuristic_risk_index=heuristic_risk_index,
+            )
             ai_text = call_groq_ai(prompt, key)
             return {
                 "explanation": ai_text,
@@ -246,7 +283,7 @@ def generate_explanation(
     action = (assessment or {}).get("recommended_action") or (
         "Avoid entering credentials, payment details, or downloading files until verified."
         if risk_level in ("MEDIUM", "HIGH", "CRITICAL", "UNKNOWN")
-        else "No major risk indicators observed across checked dimensions."
+        else "No suspicious indicators observed across checked dimensions."
     )
     bullets = "\n".join(f"- {ind}" for ind in indicators) if indicators else "- Standard baseline heuristics inspected."
     attr_bullets = ""
@@ -256,10 +293,14 @@ def generate_explanation(
             for a in attr_list[:4]
         )
 
+    h_idx = heuristic_risk_index if heuristic_risk_index is not None else (assessment or {}).get("heuristic_risk_index")
+    prob_line = f"**Calibrated ML Phishing Probability:** **{phishing_prob * 100:.1f}%**" if phishing_prob is not None else "**Calibrated ML Phishing Probability:** Unavailable"
+    heur_line = f"**Heuristic Risk Index:** **{h_idx}/100**" if h_idx is not None else "**Heuristic Risk Index:** Not computed"
+
     rule_text = (
         f"### Website Safety Assessment ({risk_level} Risk)\n\n"
         f"**Target:** `{hostname or url}`  \n"
-        f"**Heuristic Risk Index:** **{phishing_prob * 100:.0f}/100** *(note: heuristic indicators measure risk signals, not proof of intent)*\n\n"
+        f"{prob_line} | {heur_line} *(heuristics measure observed risk signals separately from ML probabilities)*\n\n"
         f"**Observed Evidence:**\n{bullets}{attr_bullets}\n\n"
         f"**Recommended Action:** {action}"
     )
@@ -286,5 +327,6 @@ if __name__ == "__main__":
         risk_level="LOW",
         phishing_prob=0.05,
         features_dict={"IsHTTPS": 1},
+        heuristic_risk_index=5,
     )
     print(res["explanation"])

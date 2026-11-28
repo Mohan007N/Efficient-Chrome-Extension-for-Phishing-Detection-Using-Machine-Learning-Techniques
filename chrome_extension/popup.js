@@ -1,14 +1,17 @@
 /**
- * popup.js — WebShield AI Popup Dashboard Controller (Manifest V3)
+ * popup.js — WebShield AI Popup Dashboard Controller (Manifest V3, v3.0)
  *
- * Displays separated multi-dimension website safety assessment, local scan history,
- * dark/light theme persistence, configurable API URL, user-confirmed trust list,
- * and feedback reporting (/feedback). Never fabricates risk scores or history.
+ * Strictly separates calibrated ML phishing_probability from Heuristic Risk Index,
+ * HTML-escapes all rendered DOM/evidence text, displays LOCAL_NETWORK_UNVERIFIED / OFFLINE / UNKNOWN
+ * states accurately, and omits permanent warning/scan bypasses.
  */
 
 "use strict";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+const U = (typeof window !== "undefined" && window.WebShieldUtils) || {
+  escapeHtml: (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,7 +58,6 @@ $("themeToggleBtn")?.addEventListener("click", async () => {
   await store.set({ ui_theme: next });
 });
 
-// Tabs
 function switchTab(name) {
   ["Overview", "Signals", "History"].forEach((t) => {
     const low = t.toLowerCase();
@@ -71,7 +73,6 @@ $("tabOverviewBtn")?.addEventListener("click", () => switchTab("overview"));
 $("tabSignalsBtn")?.addEventListener("click", () => switchTab("signals"));
 $("tabHistoryBtn")?.addEventListener("click", () => switchTab("history"));
 
-// Settings Drawer
 $("settingsBtn")?.addEventListener("click", async () => {
   const panel = $("settingsPanel");
   const open = panel.style.display !== "none";
@@ -81,13 +82,8 @@ $("settingsBtn")?.addEventListener("click", async () => {
 $("settingsCloseBtn")?.addEventListener("click", () => { $("settingsPanel").style.display = "none"; });
 
 async function refreshSettings() {
-  const data = await store.get(["api_base_url", "trusted_domains"]);
+  const data = await store.get(["api_base_url"]);
   $("apiBaseInput").value = data.api_base_url || DEFAULT_API_BASE;
-  const trusted = Array.isArray(data.trusted_domains) ? data.trusted_domains : [];
-  $("trustedCount").textContent = String(trusted.length);
-  $("trustedDomainsList").innerHTML = trusted.length
-    ? trusted.map(d => `<span class="trusted-chip">${d}</span>`).join("")
-    : `<span class="brand-sub">None added.</span>`;
 }
 
 $("saveApiBtn")?.addEventListener("click", async () => {
@@ -108,12 +104,14 @@ $("resetApiBtn")?.addEventListener("click", async () => {
   checkBackendHealth();
 });
 
-$("clearTrustedBtn")?.addEventListener("click", async () => {
-  await store.set({ trusted_domains: [] });
-  await refreshSettings();
+$("clearCacheBtn")?.addEventListener("click", async () => {
+  if (!hasChromeStorage) return;
+  const all = await chrome.storage.local.get(null);
+  const cacheKeys = Object.keys(all).filter((k) => k.startsWith("cache_") || k === "trusted_domains");
+  if (cacheKeys.length) await chrome.storage.local.remove(cacheKeys);
+  $("apiSaveStatus").textContent = `Cleared ${cacheKeys.length} cached entry(s).`;
 });
 
-// Backend health indicator
 function checkBackendHealth() {
   const pill = $("backendStatusPill");
   if (!hasChromeRuntime) {
@@ -124,6 +122,9 @@ function checkBackendHealth() {
   chrome.runtime.sendMessage({ type: "CHECK_HEALTH" }, (res) => {
     if (chrome.runtime.lastError || !res || !res.online) {
       pill.textContent = "Offline";
+      pill.className = "backend-pill offline";
+    } else if (res.health?.degraded) {
+      pill.textContent = "Degraded";
       pill.className = "backend-pill offline";
     } else {
       pill.textContent = "Online";
@@ -149,8 +150,10 @@ function renderAssessment(data) {
   showView("result");
 
   const assessment = data.assessment || {};
-  const level = (assessment.overall_risk_level || data.risk_level || "UNKNOWN").toUpperCase();
-  const idx = assessment.heuristic_risk_index ?? Math.round((data.phishing_probability || 0) * 100);
+  const level = String(assessment.overall_risk_level || data.risk_level || "UNKNOWN").toUpperCase();
+  const opStatus = assessment.operational_status || data.operational_status || "Unknown";
+  const idx = assessment.heuristic_risk_index !== undefined ? assessment.heuristic_risk_index : data.heuristic_risk_index;
+  const mlProb = assessment.phishing_probability !== undefined ? assessment.phishing_probability : data.phishing_probability;
 
   let host = "—";
   try { host = new URL(data.url).hostname; } catch { host = data.url || "—"; }
@@ -163,16 +166,22 @@ function renderAssessment(data) {
   badge.textContent = level;
   badge.className = `risk-badge risk-${level}`;
 
-  $("heuristicScoreVal").textContent = `${idx}/100`;
+  if (idx !== null && idx !== undefined) {
+    $("heuristicScoreVal").textContent = `${idx}/100`;
+    $("riskMeterFill").style.width = `${Math.max(4, Math.min(100, idx))}%`;
+  } else {
+    $("heuristicScoreVal").textContent = "N/A";
+    $("riskMeterFill").style.width = "10%";
+  }
   $("heuristicScoreVal").style.color = riskColorVar(level);
+  $("riskMeterFill").style.background = riskColorVar(level);
+
+  $("operationalStatusLabel").textContent = `Status: ${opStatus}`;
+  $("mlPhishProbVal").textContent = mlProb != null ? `${(Number(mlProb) * 100).toFixed(1)}%` : "Unavailable";
   $("urlModelScore").textContent = assessment.url_model_threat_probability != null ? `${(assessment.url_model_threat_probability * 100).toFixed(1)}%` : "N/A";
   $("domModelScore").textContent = assessment.dom_model_threat_probability != null ? `${(assessment.dom_model_threat_probability * 100).toFixed(1)}%` : "N/A";
-
-  $("riskMeterFill").style.width = `${Math.max(4, Math.min(100, idx))}%`;
-  $("riskMeterFill").style.background = riskColorVar(level);
   $("recommendedAction").textContent = assessment.recommended_action || data.verdict || "";
 
-  // Render 6 separated dimensions
   const dims = assessment.dimensions || {};
   const dimMeta = [
     ["connection_security", "Connection Security"],
@@ -184,20 +193,20 @@ function renderAssessment(data) {
   ];
   $("dimensionsGrid").innerHTML = dimMeta.map(([key, label]) => {
     const info = dims[key] || { level: "UNKNOWN" };
-    const lv = (info.level || "UNKNOWN").toUpperCase();
+    const lv = U.escapeHtml(String(info.level || "UNKNOWN").toUpperCase());
+    const safeStatus = info.status ? ` (${U.escapeHtml(info.status)})` : "";
     return `
       <div class="dim-card">
-        <span class="dim-name">${label}</span>
+        <span class="dim-name">${U.escapeHtml(label)}${safeStatus}</span>
         <span class="dim-level risk-${lv}">${lv}</span>
       </div>
     `;
   }).join("");
 
-  // Evidence & unavailable disclosures
   const ev = assessment.evidence && assessment.evidence.length ? assessment.evidence : (data.top_indicators || []);
   $("evidenceList").innerHTML = ev.length
-    ? ev.map(item => `<li>${item}</li>`).join("")
-    : "<li>No elevated risk indicators detected.</li>";
+    ? ev.map(item => `<li>${U.escapeHtml(item)}</li>`).join("")
+    : "<li>No elevated risk indicators observed.</li>";
 
   const unavail = assessment.unavailable_signals || [];
   if (unavail.length) {
@@ -207,7 +216,6 @@ function renderAssessment(data) {
     $("unavailableNote").style.display = "none";
   }
 
-  // DOM & telemetry grid
   const dom = data.features?.dom_features || {};
   const domRows = [
     ["HTTPS Transport", dom.is_https ? "Yes" : "No"],
@@ -224,14 +232,13 @@ function renderAssessment(data) {
     ["Popup Triggers", dom.popup_trigger_count ?? 0],
   ];
   $("domSignalsGrid").innerHTML = domRows.map(([k, v]) => `
-    <div class="sig-item"><span class="sig-key">${k}</span><span class="sig-val">${v}</span></div>
+    <div class="sig-item"><span class="sig-key">${U.escapeHtml(k)}</span><span class="sig-val">${U.escapeHtml(v)}</span></div>
   `).join("");
 
   $("xaiOutput").style.display = "none";
   $("feedbackStatus").style.display = "none";
 }
 
-// Evidence accordion
 $("toggleEvidenceBtn")?.addEventListener("click", () => {
   const body = $("evidenceBody");
   const open = body.style.display !== "none";
@@ -239,7 +246,6 @@ $("toggleEvidenceBtn")?.addEventListener("click", () => {
   $("evidenceChevron").textContent = open ? "▸" : "▾";
 });
 
-// Explain Verdict
 $("explainBtn")?.addEventListener("click", () => {
   if (!currentData || !hasChromeRuntime) return;
   const out = $("xaiOutput");
@@ -254,6 +260,7 @@ $("explainBtn")?.addEventListener("click", () => {
     is_phishing: currentData.is_phishing,
     risk_level: currentData.risk_level,
     phishing_probability: currentData.phishing_probability,
+    heuristic_risk_index: currentData.heuristic_risk_index,
     features: currentData.features || {},
     assessment: currentData.assessment || null,
   }, (res) => {
@@ -261,23 +268,6 @@ $("explainBtn")?.addEventListener("click", () => {
   });
 });
 
-// User-confirmed Trusted Domain
-$("trustDomainBtn")?.addEventListener("click", async () => {
-  if (!currentData?.url) return;
-  let host = "";
-  try { host = new URL(currentData.url).hostname.toLowerCase(); } catch { return; }
-  if (!window.confirm(`Confirm marking '${host}' as trusted? Future automatic warnings for this host will be suppressed until cleared.`)) {
-    return;
-  }
-  const res = await store.get("trusted_domains");
-  const list = Array.isArray(res.trusted_domains) ? res.trusted_domains : [];
-  if (!list.includes(host)) list.push(host);
-  await store.set({ trusted_domains: list });
-  $("feedbackStatus").style.display = "block";
-  $("feedbackStatus").textContent = `Trusted '${host}' locally.`;
-});
-
-// Feedback reporting
 function sendFeedback(reportType) {
   if (!currentData?.url || !hasChromeRuntime) return;
   chrome.runtime.sendMessage({
@@ -286,7 +276,7 @@ function sendFeedback(reportType) {
       url: currentData.url,
       report_type: reportType,
       reported_risk_level: currentData.risk_level,
-      notes: "Submitted from WebShield AI Chrome extension popup.",
+      notes: "Submitted from WebShield AI Chrome extension v3.0 popup.",
     },
   }, (res) => {
     $("feedbackStatus").style.display = "block";
@@ -299,7 +289,6 @@ function sendFeedback(reportType) {
 $("reportFpBtn")?.addEventListener("click", () => sendFeedback("false_positive"));
 $("reportMissedBtn")?.addEventListener("click", () => sendFeedback("missed_suspicious"));
 
-// History tab
 async function renderHistory() {
   const res = await store.get("scan_history");
   const list = Array.isArray(res.scan_history) ? res.scan_history : [];
@@ -307,15 +296,21 @@ async function renderHistory() {
     $("historyList").innerHTML = `<p class="view-sub">No local scan history recorded yet.</p>`;
     return;
   }
-  $("historyList").innerHTML = list.map(item => `
-    <div class="hist-item">
-      <div style="min-width:0">
-        <div class="hist-host">${item.hostname || item.url}</div>
-        <div class="hist-time">${new Date(item.timestamp).toLocaleString()}</div>
+  $("historyList").innerHTML = list.map(item => {
+    const safeHost = U.escapeHtml(item.hostname || item.url);
+    const safeLv = U.escapeHtml(item.risk_level || "UNKNOWN");
+    const safeOp = U.escapeHtml(item.operational_status || "");
+    const safeTime = U.escapeHtml(new Date(item.timestamp).toLocaleString());
+    return `
+      <div class="hist-item">
+        <div style="min-width:0">
+          <div class="hist-host">${safeHost}</div>
+          <div class="hist-time">${safeTime}${safeOp ? ` • ${safeOp}` : ""}</div>
+        </div>
+        <span class="risk-badge risk-${safeLv}">${safeLv}</span>
       </div>
-      <span class="risk-badge risk-${item.risk_level || "UNKNOWN"}">${item.risk_level || "UNKNOWN"}</span>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 }
 
 $("clearHistoryBtn")?.addEventListener("click", async () => {
@@ -323,7 +318,6 @@ $("clearHistoryBtn")?.addEventListener("click", async () => {
   renderHistory();
 });
 
-// Rescan flow
 async function triggerRescan() {
   if (!hasChromeTabs) { showView("idle"); return; }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -338,12 +332,13 @@ async function triggerRescan() {
 }
 
 $("rescanBtn")?.addEventListener("click", triggerRescan);
+$("reverifyBtn")?.addEventListener("click", triggerRescan);
 $("idleScanBtn")?.addEventListener("click", triggerRescan);
 $("retryErrorBtn")?.addEventListener("click", triggerRescan);
 
 function pollTab(key, attempt = 0) {
   if (attempt > 24) {
-    $("errorMsg").textContent = "Scan timed out. Check backend connection.";
+    $("errorMsg").textContent = "Scan timed out. Check backend connection (OFFLINE).";
     showView("error");
     return;
   }
@@ -351,8 +346,8 @@ function pollTab(key, attempt = 0) {
     const res = await store.get(key);
     const data = res[key];
     if (!data || data.status === "loading") { pollTab(key, attempt + 1); return; }
-    if (data.status === "error") {
-      $("errorMsg").textContent = data.error || "Backend unreachable.";
+    if (data.status === "error" || data.status === "offline") {
+      $("errorMsg").textContent = data.error || "Backend offline or unreachable.";
       showView("error");
       return;
     }
@@ -378,7 +373,7 @@ async function bootstrap() {
   const data = res[key];
   if (!data) showView("idle");
   else if (data.status === "loading") { showView("loading"); pollTab(key); }
-  else if (data.status === "error") { $("errorMsg").textContent = data.error || "Backend unreachable."; showView("error"); }
+  else if (data.status === "error" || data.status === "offline") { $("errorMsg").textContent = data.error || "Backend offline or unreachable."; showView("error"); }
   else if (data.status === "done") renderAssessment(data);
 }
 

@@ -1,0 +1,17 @@
+{
+  "generated_at": "2026-11-28T07:47:00.683838+00:00",
+  "snapshots": {
+    "unauthorized_domains": {
+      "path": "dataset/unauthorized_domains.json.gz",
+      "size_bytes": 8407251,
+      "sha256": "b2dbfc08923d6271c38bf245d9a87c38e1c3c0ca1dfd59262b228625f8e755a0",
+      "modified_at": "2026-11-27T08:44:31.009668+00:00"
+    },
+    "tranco_top1m": {
+      "path": "dataset/tranco_top1m.json.gz",
+      "size_bytes": 9896773,
+      "sha256": "0c2fbecb573f0fa5600771d822f810bd6bfdf2cb1460f61c4cb65f4de6efffe9",
+      "modified_at": "2026-11-27T08:44:07.221768+00:00"
+    }
+  }
+}

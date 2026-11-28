@@ -1,33 +1,33 @@
 /**
- * background.js — WebShield AI Chrome Extension Service Worker (Manifest V3)
+ * background.js — WebShield AI Chrome Extension Service Worker (Manifest V3, v3.0)
  *
- * Features:
- * - Configurable API base URL stored in chrome.storage.local (supports local dev & HTTPS prod)
- * - TTL response caching, request throttling, and active-request deduplication
- * - User-confirmed trusted domains registry
- * - Local scan history persistence (max 100 entries, clearable)
- * - Feedback reporting (/feedback) and backend connectivity status (/health)
- * - No API secrets or direct LLM keys stored or invoked in extension code
+ * Security & Reliability Features:
+ * - Cache keys bound to normalized URL + DOM fingerprint + backend model version + schema version
+ * - Automatic navigation invalidation on tab URL changes (`chrome.tabs.onUpdated`)
+ * - Never suppresses security scans or critical alerts (eliminates persistent Trust bypass)
+ * - Explicitly distinguishes LOCAL_NETWORK_UNVERIFIED, UNKNOWN, and OFFLINE states
+ * - Configurable API base URL in chrome.storage.local; zero embedded secrets or cookie access
  */
 
 "use strict";
 
+importScripts("utils.js");
+
+const U = globalThis.WebShieldUtils;
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const MIN_SCAN_INTERVAL_MS = 1200;
+const MODEL_VER_TTL_MS = 10 * 60 * 1000;
+const MIN_SCAN_INTERVAL_MS = 1000;
+const MAX_CACHE_ENTRIES = 150;
 
 const inFlightScans = new Map();
 const lastScanTimestamps = new Map();
+let cachedModelVersionInfo = { version: "v3.0.0", fetchedAt: 0 };
 
 async function getApiBaseUrl() {
   const res = await chrome.storage.local.get("api_base_url");
   const raw = (res.api_base_url || DEFAULT_API_BASE_URL).trim().replace(/\/+$/, "");
   return raw || DEFAULT_API_BASE_URL;
-}
-
-async function getTrustedDomains() {
-  const res = await chrome.storage.local.get("trusted_domains");
-  return Array.isArray(res.trusted_domains) ? res.trusted_domains : [];
 }
 
 function extractHostname(url) {
@@ -38,15 +38,47 @@ function extractHostname(url) {
   }
 }
 
+async function getActiveModelVersion(baseUrl) {
+  const now = Date.now();
+  if (now - cachedModelVersionInfo.fetchedAt < MODEL_VER_TTL_MS && cachedModelVersionInfo.version) {
+    return cachedModelVersionInfo.version;
+  }
+  try {
+    const resp = await fetch(`${baseUrl}/version`, { method: "GET" });
+    if (resp.ok) {
+      const json = await resp.json();
+      const ver = `${json.url_model_version || "v3.0.0"}-${json.dom_model_version || "v3.0.0"}`;
+      cachedModelVersionInfo = { version: ver, fetchedAt: now };
+      return ver;
+    }
+  } catch {
+    // Keep last known or default
+  }
+  return cachedModelVersionInfo.version || "v3.0.0";
+}
+
+async function pruneStaleCacheIfNeeded() {
+  const all = await chrome.storage.local.get(null);
+  const cacheKeys = Object.keys(all).filter((k) => k.startsWith("cache_"));
+  if (cacheKeys.length <= MAX_CACHE_ENTRIES) return;
+  const sorted = cacheKeys
+    .map((k) => ({ key: k, ts: Number(all[k]?.timestamp || 0) }))
+    .sort((a, b) => a.ts - b.ts);
+  const toRemove = sorted.slice(0, cacheKeys.length - MAX_CACHE_ENTRIES).map((x) => x.key);
+  if (toRemove.length) await chrome.storage.local.remove(toRemove);
+}
+
 async function appendScanHistory(entry) {
   const res = await chrome.storage.local.get("scan_history");
   const history = Array.isArray(res.scan_history) ? res.scan_history : [];
-  const filtered = history.filter(item => item.url !== entry.url);
+  const filtered = history.filter((item) => item.url !== entry.url);
   filtered.unshift({
     url: entry.url,
     hostname: extractHostname(entry.url),
     risk_level: entry.risk_level,
-    heuristic_risk_index: entry.assessment?.heuristic_risk_index ?? Math.round((entry.phishing_probability || 0) * 100),
+    operational_status: entry.operational_status || entry.assessment?.operational_status || "Unknown",
+    heuristic_risk_index: entry.heuristic_risk_index ?? entry.assessment?.heuristic_risk_index ?? null,
+    phishing_probability: entry.phishing_probability ?? null,
     timestamp: entry.timestamp,
   });
   await chrome.storage.local.set({ scan_history: filtered.slice(0, 100) });
@@ -132,44 +164,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleAnalyzePage(tabId, pageUrl, features, force) {
   const host = extractHostname(pageUrl);
-  const trusted = await getTrustedDomains();
 
-  if (!force && trusted.includes(host)) {
-    const trustedResult = {
+  // Explicit Local/Private Network handling: never misreport as LOW/Safe
+  if (U.isLocalNetworkHost(host)) {
+    const localData = {
       status: "done",
       url: pageUrl,
       timestamp: Date.now(),
       is_phishing: false,
-      phishing_probability: 0.0,
-      legitimate_probability: 1.0,
-      verdict: `User-trusted domain (${host})`,
-      risk_level: "LOW",
-      whitelisted: true,
-      user_trusted: true,
-      top_indicators: ["Marked as trusted by user confirmation."],
+      phishing_probability: null,
+      legitimate_probability: null,
+      heuristic_risk_index: null,
+      operational_status: "LOCAL_NETWORK_UNVERIFIED",
+      connection_security: "LOCAL_NETWORK_UNVERIFIED",
+      verdict: `LOCAL NETWORK UNVERIFIED (${host})`,
+      risk_level: "UNKNOWN",
+      whitelisted: false,
+      top_indicators: ["Loopback or private network host detected; external reputation and threat scans skipped."],
       assessment: {
-        overall_risk_level: "LOW",
-        heuristic_risk_index: 0,
+        overall_risk_level: "UNKNOWN",
+        phishing_probability: null,
+        heuristic_risk_index: null,
+        operational_status: "LOCAL_NETWORK_UNVERIFIED",
+        connection_security: "LOCAL_NETWORK_UNVERIFIED",
         dimensions: {
-          connection_security: { level: pageUrl.startsWith("https") ? "LOW" : "MEDIUM", status: pageUrl.startsWith("https") ? "SECURE_HTTPS" : "INSECURE_HTTP", evidence: [] },
-          phishing_risk: { level: "LOW", score: 0.0, evidence: [] },
-          malware_risk: { level: "LOW", score: 0.0, evidence: [] },
-          credential_risk: { level: "LOW", score: 0.0, evidence: [] },
-          payment_risk: { level: "LOW", score: 0.0, evidence: [] },
-          deceptive_behavior_risk: { level: "LOW", score: 0.0, evidence: [] },
+          connection_security: { level: "UNKNOWN", status: "LOCAL_NETWORK_UNVERIFIED", evidence: [] },
+          phishing_risk: { level: "UNKNOWN", score: null, evidence: [] },
+          malware_risk: { level: "UNKNOWN", score: null, evidence: [] },
+          credential_risk: { level: "UNKNOWN", score: null, evidence: [] },
+          payment_risk: { level: "UNKNOWN", score: null, evidence: [] },
+          deceptive_behavior_risk: { level: "UNKNOWN", score: null, evidence: [] },
         },
-        evidence: ["Domain explicitly confirmed as trusted by the user."],
-        unavailable_signals: features.dom_features?.unavailable_signals || [],
-        recommended_action: "User-confirmed trusted domain.",
+        evidence: ["Website not inspected externally: local/private network destination (LOCAL_NETWORK_UNVERIFIED)."],
+        unavailable_signals: ["external_threat_intel", "rdap_domain_age"],
+        recommended_action: "Local or private host. External reputation checks do not apply.",
       },
       features,
     };
-    await chrome.storage.local.set({ [`tab_${tabId}`]: trustedResult });
-    updateBadge(tabId, "LOW");
-    return { ok: true };
+    await chrome.storage.local.set({ [`tab_${tabId}`]: localData });
+    updateBadge(tabId, "UNKNOWN", "LOCAL_NETWORK_UNVERIFIED");
+    return { ok: true, local: true };
   }
 
-  // Throttle rapid duplicate triggers on the same tab/URL
   const now = Date.now();
   const prevTs = lastScanTimestamps.get(`${tabId}:${pageUrl}`) || 0;
   if (!force && now - prevTs < MIN_SCAN_INTERVAL_MS) {
@@ -177,15 +213,21 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
   }
   lastScanTimestamps.set(`${tabId}:${pageUrl}`, now);
 
-  // Check TTL cache
-  const cacheKey = `cache_${pageUrl}`;
+  const baseUrl = await getApiBaseUrl();
+  const modelVersion = await getActiveModelVersion(baseUrl);
+  const cacheKey = U.buildCacheKey({
+    url: pageUrl,
+    domFeatures: features?.dom_features,
+    modelVersion,
+  });
+
   if (!force) {
     const cachedObj = await chrome.storage.local.get(cacheKey);
     const cached = cachedObj[cacheKey];
-    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    if (U.isCacheEntryValid(cached, modelVersion, now, CACHE_TTL_MS)) {
       const storageData = { ...cached, status: "done", features };
       await chrome.storage.local.set({ [`tab_${tabId}`]: storageData });
-      updateBadge(tabId, storageData.risk_level);
+      updateBadge(tabId, storageData.risk_level, storageData.operational_status);
       chrome.tabs.sendMessage(tabId, { type: "PHISHING_RESULT", data: storageData }, () => { void chrome.runtime.lastError; });
       return { ok: true, cached: true };
     }
@@ -196,19 +238,24 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
   });
 
   try {
-    let promise = inFlightScans.get(pageUrl);
+    let promise = inFlightScans.get(cacheKey);
     if (!promise) {
-      promise = callPredictAPI(features).finally(() => inFlightScans.delete(pageUrl));
-      inFlightScans.set(pageUrl, promise);
+      promise = callPredictAPI(baseUrl, features).finally(() => inFlightScans.delete(cacheKey));
+      inFlightScans.set(cacheKey, promise);
     }
     const result = await promise;
     const storageData = {
       status: "done",
       url: pageUrl,
+      model_version: modelVersion,
       timestamp: Date.now(),
       is_phishing: result.is_phishing,
       phishing_probability: result.phishing_probability,
       legitimate_probability: result.legitimate_probability,
+      heuristic_risk_index: result.heuristic_risk_index ?? result.assessment?.heuristic_risk_index ?? null,
+      operational_status: result.operational_status || result.assessment?.operational_status || "Unknown",
+      connection_security: result.connection_security || result.assessment?.connection_security || "UNKNOWN",
+      model_availability: result.model_availability || result.assessment?.model_availability || {},
       verdict: result.verdict,
       risk_level: result.risk_level,
       whitelisted: result.whitelisted || false,
@@ -221,15 +268,16 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
       [`tab_${tabId}`]: storageData,
       [cacheKey]: storageData,
     });
+    pruneStaleCacheIfNeeded().catch(() => {});
     await appendScanHistory(storageData);
-    updateBadge(tabId, result.risk_level);
+    updateBadge(tabId, result.risk_level, storageData.operational_status);
 
     chrome.tabs.sendMessage(tabId, { type: "PHISHING_RESULT", data: storageData }, () => {
       void chrome.runtime.lastError;
     });
 
     if (result.risk_level === "HIGH" || result.risk_level === "CRITICAL") {
-      const idx = result.assessment?.heuristic_risk_index ?? Math.round((result.phishing_probability || 0) * 100);
+      const idx = result.heuristic_risk_index ?? result.assessment?.heuristic_risk_index ?? "N/A";
       chrome.notifications.create(`ws_${tabId}_${Date.now()}`, {
         type: "basic",
         iconUrl: "icons/icon128.png",
@@ -242,19 +290,20 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
   } catch (err) {
     await chrome.storage.local.set({
       [`tab_${tabId}`]: {
-        status: "error",
+        status: "offline",
+        operational_status: "OFFLINE",
+        risk_level: "UNKNOWN",
         url: pageUrl,
         timestamp: Date.now(),
-        error: err.message || "Backend service unreachable.",
+        error: err.message || "Backend service offline or unreachable.",
       },
     });
-    updateBadgeError(tabId);
+    updateBadge(tabId, "UNKNOWN", "OFFLINE");
     return { error: err.message };
   }
 }
 
-async function callPredictAPI(features) {
-  const base = await getApiBaseUrl();
+async function callPredictAPI(base, features) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 9000);
   try {
@@ -284,7 +333,8 @@ async function handleExplainRequest(message) {
       hostname: message.hostname || "",
       is_phishing: Boolean(message.is_phishing),
       risk_level: message.risk_level || "LOW",
-      phishing_probability: message.phishing_probability ?? 0.5,
+      phishing_probability: message.phishing_probability ?? null,
+      heuristic_risk_index: message.heuristic_risk_index ?? null,
       features: message.features || {},
       assessment: message.assessment || null,
     }),
@@ -295,31 +345,42 @@ async function handleExplainRequest(message) {
   return await resp.json();
 }
 
-function updateBadge(tabId, riskLevel) {
-  const lv = (riskLevel || "LOW").toUpperCase();
-  let text = "✓";
-  let color = "#10b981";
-  if (lv === "CRITICAL") {
-    text = "!!!";
-    color = "#e11d48";
-  } else if (lv === "HIGH") {
-    text = "!!";
-    color = "#f97316";
+function updateBadge(tabId, riskLevel, operationalStatus = "") {
+  if (operationalStatus === "LOCAL_NETWORK_UNVERIFIED") {
+    chrome.action.setBadgeText({ tabId, text: "LOC" });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#64748b" });
+    return;
+  }
+  if (operationalStatus === "OFFLINE") {
+    chrome.action.setBadgeText({ tabId, text: "OFF" });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#475569" });
+    return;
+  }
+  const lv = String(riskLevel || "UNKNOWN").toUpperCase();
+  let text = "?";
+  let color = "#64748b";
+  if (lv === "LOW") {
+    text = "✓";
+    color = "#10b981";
   } else if (lv === "MEDIUM") {
     text = "!";
     color = "#f59e0b";
-  } else if (lv === "UNKNOWN") {
-    text = "?";
-    color = "#64748b";
+  } else if (lv === "HIGH") {
+    text = "!!";
+    color = "#f97316";
+  } else if (lv === "CRITICAL") {
+    text = "!!!";
+    color = "#e11d48";
   }
   chrome.action.setBadgeText({ tabId, text });
   chrome.action.setBadgeBackgroundColor({ tabId, color });
 }
 
-function updateBadgeError(tabId) {
-  chrome.action.setBadgeText({ tabId, text: "ERR" });
-  chrome.action.setBadgeBackgroundColor({ tabId, color: "#6b7280" });
-}
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) {
+    chrome.storage.local.remove(`tab_${tabId}`);
+  }
+});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.local.remove(`tab_${tabId}`);

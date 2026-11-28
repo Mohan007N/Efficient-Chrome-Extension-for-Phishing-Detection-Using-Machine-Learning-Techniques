@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WebShield AI — Website Safety & Trust</title>
+  <title>WebShield AI v3.0 — Website Safety &amp; Trust</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -15,7 +15,7 @@
         <div class="brand-mark" id="brandMark" aria-hidden="true">🛡️</div>
         <div>
           <div class="brand-title-row">
-            <span class="brand-name">WebShield AI</span>
+            <span class="brand-name">WebShield AI <small>v3.0</small></span>
             <span class="backend-pill offline" id="backendStatusPill" title="Backend connectivity">Checking…</span>
           </div>
           <div class="brand-sub" id="lastScanTime">Last scan: —</div>
@@ -24,18 +24,18 @@
       <div class="header-actions">
         <button class="btn-icon" id="themeToggleBtn" title="Toggle Dark / Light theme" aria-label="Toggle theme">◐</button>
         <button class="btn-icon" id="rescanBtn" title="Rescan active webpage" aria-label="Rescan">↻</button>
-        <button class="btn-icon" id="settingsBtn" title="Backend & Privacy Settings" aria-label="Settings">⚙</button>
+        <button class="btn-icon" id="settingsBtn" title="Backend &amp; Privacy Settings" aria-label="Settings">⚙</button>
       </div>
     </header>
 
     <!-- Settings Drawer -->
     <section class="settings-panel" id="settingsPanel" style="display:none">
       <div class="settings-header">
-        <span class="settings-title">Backend &amp; Privacy Settings</span>
+        <span class="settings-title">Backend &amp; Cache Settings</span>
         <button class="btn-close-sm" id="settingsCloseBtn" aria-label="Close">✕</button>
       </div>
       <p class="settings-desc">
-        Configure your FastAPI assessment backend URL (local or HTTPS production). No passwords, cookies, or API secrets are stored or sent by this extension.
+        Configure your FastAPI assessment backend URL (local or HTTPS production). Zero passwords, cookies, or secrets are collected or transmitted.
       </p>
       <label class="field-label" for="apiBaseInput">Backend API URL</label>
       <div class="key-field-wrap">
@@ -48,10 +48,12 @@
       </div>
       <div class="trusted-section">
         <div class="trusted-header">
-          <span>User-Confirmed Trusted Domains (<span id="trustedCount">0</span>)</span>
-          <button class="btn-link" id="clearTrustedBtn">Clear All</button>
+          <span>Security Policy &amp; Cache</span>
+          <button class="btn-link" id="clearCacheBtn">Clear Scan Cache</button>
         </div>
-        <div class="trusted-list" id="trustedDomainsList"></div>
+        <p class="settings-desc" style="margin-bottom:0">
+          Trusted domains never bypass scanning or suppress critical alerts.
+        </p>
       </div>
     </section>
 
@@ -69,7 +71,7 @@
         <div class="state-box" id="viewLoading" style="display:none">
           <div class="spinner"></div>
           <p class="view-title">Assessing Website Safety…</p>
-          <p class="view-sub">Evaluating URL, DOM behaviour, credentials, payments, and threat feeds.</p>
+          <p class="view-sub">Evaluating calibrated URL/DOM ML models, credentials, payments, TLS, and threat feeds.</p>
         </div>
 
         <div class="state-box" id="viewIdle">
@@ -79,8 +81,8 @@
         </div>
 
         <div class="state-box" id="viewError" style="display:none">
-          <p class="view-title">Backend Unreachable</p>
-          <p class="view-sub" id="errorMsg">Could not reach the assessment API.</p>
+          <p class="view-title">Backend Offline / Unreachable</p>
+          <p class="view-sub" id="errorMsg">Could not reach the assessment API. Status: OFFLINE.</p>
           <button class="btn-secondary" id="retryErrorBtn">Retry Scan</button>
         </div>
 
@@ -94,16 +96,18 @@
             <span class="risk-badge" id="overallRiskBadge">UNKNOWN</span>
           </div>
 
-          <!-- Hero Score & Recommended Action -->
+          <!-- Separated ML Probability & Heuristic Risk Index -->
           <div class="hero-card" id="heroCard">
             <div class="hero-top">
               <div>
                 <div class="hero-label">Heuristic Risk Index</div>
                 <div class="hero-score" id="heuristicScoreVal">—</div>
+                <div class="brand-sub" id="operationalStatusLabel">Status: Unknown</div>
               </div>
               <div class="ml-scores">
-                <div>URL ML: <strong id="urlModelScore">—</strong></div>
-                <div>DOM ML: <strong id="domModelScore">—</strong></div>
+                <div>ML Phish Prob: <strong id="mlPhishProbVal">N/A</strong></div>
+                <div>URL ML: <strong id="urlModelScore">N/A</strong></div>
+                <div>DOM ML: <strong id="domModelScore">N/A</strong></div>
               </div>
             </div>
             <div class="risk-meter-track">
@@ -136,9 +140,9 @@
             <div class="xai-output" id="xaiOutput" style="display:none"></div>
           </div>
 
-          <!-- User Controls: Trust & Feedback -->
+          <!-- User Feedback Controls (Zero permanent alert bypass) -->
           <div class="action-bar">
-            <button class="btn-outline" id="trustDomainBtn">Trust Site</button>
+            <button class="btn-outline" id="reverifyBtn">Force Rescan</button>
             <button class="btn-outline" id="reportFpBtn">Report False Positive</button>
             <button class="btn-outline" id="reportMissedBtn">Report Threat</button>
           </div>
@@ -168,6 +172,7 @@
     </footer>
   </div>
 
+  <script src="utils.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

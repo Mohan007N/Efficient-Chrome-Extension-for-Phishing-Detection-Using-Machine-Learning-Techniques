@@ -102,3 +102,15 @@ def test_redirect_indicators_and_payment_form():
     cp = evaluate_credential_and_payment_risk("https://deals.example.shop/checkout", dom)
     assert cp["payment_risk_score"] >= 0.70
 
+
+def test_dom_v3_sha256_schema_and_analysis_mode():
+    from src.dom_features import DOM_FEATURE_COLUMNS, compute_content_sha256, validate_dom_feature_schema
+
+    html = "<html><head><title>NorthStar Bank</title></head><body><p>Public security info.</p></body></html>"
+    dom = extract_dom_features_from_html("https://northstarbank.invalid/info", html, analysis_mode="live_browser_dom")
+    assert dom["analysis_mode"] == "live_browser_dom"
+    assert len(compute_content_sha256(html)) == 64
+    assert dom["domain_title_match_score"] > 0.0
+    assert validate_dom_feature_schema(dom, DOM_FEATURE_COLUMNS) == list(DOM_FEATURE_COLUMNS)
+
+

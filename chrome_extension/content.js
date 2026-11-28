@@ -1,10 +1,12 @@
 /**
- * content.js — WebShield AI DOM & URL Metadata Inspector (Manifest V3)
+ * content.js — WebShield AI DOM & URL Metadata Inspector (Manifest V3, v3.0)
  *
- * Privacy Guarantees:
+ * Security & Privacy Guarantees:
  * - Inspects only structural metadata (element counts, form action hostnames, script origins).
- * - NEVER collects password values, typed form values, cookies, or authentication tokens.
- * - Explicitly discloses cross-origin iframes whose DOM cannot be inspected.
+ * - NEVER collects password values, typed form inputs, cookies, or authentication tokens.
+ * - Computes deterministic DOM fingerprints to invalidate stale cache when dynamic JS mutates DOM.
+ * - Escapes all text before rendering warning banners (XSS prevention).
+ * - Never suppresses warnings automatically for HIGH/CRITICAL risks.
  */
 
 (function () {
@@ -12,6 +14,12 @@
 
   const proto = window.location.protocol;
   if (proto !== "http:" && proto !== "https:") return;
+
+  const U = (typeof globalThis !== "undefined" && globalThis.WebShieldUtils) || {
+    escapeHtml: (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+    computeDomFingerprint: () => "dom_0",
+    computeCharStats: () => ({ spacialCharRatioInURL: 0, charContinuationRate: 0 }),
+  };
 
   const SERP_PATTERNS = [
     /^https?:\/\/(www\.)?google\.[a-z.]+\/search/,
@@ -23,8 +31,9 @@
     /^https?:\/\/search\.yahoo\.com/,
   ];
 
-  const SCAN_KEY = "__webshield_last_scanned__";
+  const SCAN_KEY = "__webshield_last_sig_v3__";
   let debounceTimer = null;
+  let mutationScanCount = 0;
 
   function countMatches(str, regex) {
     const m = str.match(regex);
@@ -71,12 +80,13 @@
     const titleRaw = titleEl ? titleEl.textContent.trim() : "";
     const hasTitle = titleRaw ? 1 : 0;
     const titleClean = titleRaw.toLowerCase().replace(/[^a-z0-9 ]/g, " ");
+    const titleCompact = titleRaw.toLowerCase().replace(/[^a-z0-9]/g, "");
     const titleWords = titleClean.split(/\s+/).filter(Boolean);
     const domainWords = hostname.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
-    const domainMatches = domainWords.filter(w => titleWords.includes(w) || titleClean.includes(w)).length;
+    const domainMatches = domainWords.filter(w => titleWords.includes(w) || titleCompact.includes(w)).length;
     const domainTitleMatchScore = domainWords.length > 0 ? Math.min(100, Math.round((domainMatches / domainWords.length) * 1000) / 10) : 0;
 
-    // Group A & B: Forms, credentials, and payment input metadata (NEVER read .value!)
+    // Metadata only — NEVER read input .value, cookies, or auth tokens
     const forms = Array.from(document.querySelectorAll("form"));
     const allInputs = Array.from(document.querySelectorAll("input, select, textarea"));
     const pwdInputs = document.querySelectorAll("input[type='password']").length;
@@ -148,7 +158,6 @@
     const hasPrepaidWithoutCod = isCommerce && hasPrepaid && !hasCod ? 1 : 0;
     const hasRestrictiveRefund = /(store\s+credit|wallet\s+credit|credit\s+note\s+only|no\s+refund|non[- ]refundable|no\s+return|final\s+sale)/i.test(lowerText) ? 1 : 0;
 
-    // Group C: Iframes, scripts, links, popups, redirects & deceptive CTAs
     const iframes = Array.from(document.querySelectorAll("iframe"));
     let numHiddenIframes = 0;
     let crossOriginIframes = 0;
@@ -303,11 +312,14 @@
       mixed_content_count: mixedContentCount,
       cross_origin_iframes_uninspected: crossOriginIframes,
       unavailable_signals: unavailable,
+      analysis_mode: "extension_dom",
     };
+    domFeatures.dom_fingerprint = U.computeDomFingerprint(domFeatures);
 
     const obfChars = countMatches(url, /%[0-9a-fA-F]{2}/g);
     const letters = countMatches(url, /[a-zA-Z]/g);
     const digits = countMatches(url, /[0-9]/g);
+    const charStats = U.computeCharStats(url);
     const socialNets = ["facebook.com", "twitter.com", "x.com", "instagram.com", "linkedin.com", "youtube.com", "github.com"];
     const hasSocialNet = links.some(a => socialNets.some(s => (a.href || "").includes(s))) ? 1 : 0;
 
@@ -331,8 +343,8 @@
       NoOfQMarkInURL: (url.match(/\?/g) || []).length,
       NoOfAmpersandInURL: (url.match(/&/g) || []).length,
       NoOfOtherSpecialCharsInURL: countMatches(url, /[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]/g),
-      SpacialCharRatioInURL: 0,
-      CharContinuationRate: 0,
+      SpacialCharRatioInURL: charStats.spacialCharRatioInURL,
+      CharContinuationRate: charStats.charContinuationRate,
       IsHTTPS: isHttps,
       LineOfCode: lines.length,
       LargestLineLength: lines.reduce((m, l) => Math.max(m, l.length), 0),
@@ -375,11 +387,14 @@
     if (autoDismissTimer) clearTimeout(autoDismissTimer);
 
     const assessment = data.assessment || {};
-    const riskLevel = (assessment.overall_risk_level || data.risk_level || "LOW").toUpperCase();
-    if (riskLevel === "LOW" || data.user_trusted) return;
+    const riskLevel = String(assessment.overall_risk_level || data.risk_level || "LOW").toUpperCase();
+    const opStatus = String(assessment.operational_status || data.operational_status || "");
+    if (riskLevel === "LOW" || opStatus === "LOCAL_NETWORK_UNVERIFIED") return;
+    if (riskLevel === "UNKNOWN" && opStatus !== "OFFLINE") return;
 
-    const evidence = (assessment.evidence || data.top_indicators || []).slice(0, 4);
-    const action = assessment.recommended_action || "Proceed carefully before entering personal or payment details.";
+    const rawEvidence = (assessment.evidence || data.top_indicators || []).slice(0, 4);
+    const safeAction = U.escapeHtml(assessment.recommended_action || "Proceed carefully before entering personal or payment details.");
+    const safeLevel = U.escapeHtml(riskLevel);
     const accent = riskLevel === "CRITICAL" ? "#e11d48" : (riskLevel === "HIGH" ? "#f97316" : "#f59e0b");
 
     const banner = document.createElement("div");
@@ -392,15 +407,15 @@
       box-shadow: 0 10px 30px rgba(0,0,0,0.6) !important; box-sizing: border-box !important;
     `;
 
-    const evHtml = evidence.map(e => `<div style="font-size:11px;color:#cbd5e1;margin-top:2px;">• ${e}</div>`).join("");
+    const evHtml = rawEvidence.map(e => `<div style="font-size:11px;color:#cbd5e1;margin-top:2px;">• ${U.escapeHtml(e)}</div>`).join("");
     banner.innerHTML = `
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;">
         <div style="min-width:0;">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <span style="font-size:13px;font-weight:700;color:#ffffff;">WebShield Safety Notice</span>
-            <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${accent}26;color:${accent};border:1px solid ${accent}66;">${riskLevel} RISK</span>
+            <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${accent}26;color:${accent};border:1px solid ${accent}66;">${safeLevel} RISK</span>
           </div>
-          <div style="font-size:11.5px;color:#e2e8f0;margin-top:3px;">${action}</div>
+          <div style="font-size:11.5px;color:#e2e8f0;margin-top:3px;">${safeAction}</div>
           ${evHtml}
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
@@ -420,21 +435,12 @@
     }
   }
 
-  function runScan(force = false) {
-    const currentUrl = window.location.href;
-    if (SERP_PATTERNS.some(p => p.test(currentUrl))) return;
-    if (!force && window[SCAN_KEY] === currentUrl) return;
-    if (!isPageMeaningful()) {
-      setTimeout(() => { if (isPageMeaningful()) dispatchScan(currentUrl, force); }, 1200);
-      return;
-    }
-    dispatchScan(currentUrl, force);
-  }
-
   function dispatchScan(currentUrl, force) {
-    window[SCAN_KEY] = currentUrl;
     try {
       const payload = extractStructuredFeatures();
+      const sig = `${currentUrl}::${payload.dom_features.dom_fingerprint}`;
+      if (!force && window[SCAN_KEY] === sig) return;
+      window[SCAN_KEY] = sig;
       chrome.runtime.sendMessage({ type: "ANALYZE_PAGE", url: currentUrl, force, features: payload }, () => {
         if (chrome.runtime.lastError) return;
       });
@@ -443,9 +449,19 @@
     }
   }
 
-  function scheduleDebouncedScan(force = false) {
+  function runScan(force = false) {
+    const currentUrl = window.location.href;
+    if (SERP_PATTERNS.some(p => p.test(currentUrl))) return;
+    if (!isPageMeaningful()) {
+      setTimeout(() => { if (isPageMeaningful()) dispatchScan(currentUrl, force); }, 1200);
+      return;
+    }
+    dispatchScan(currentUrl, force);
+  }
+
+  function scheduleDebouncedScan(force = false, delayMs = 700) {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => runScan(force), 700);
+    debounceTimer = setTimeout(() => runScan(force), delayMs);
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -460,8 +476,32 @@
     }
   });
 
-  // Initial scan + debounced SPA URL change listeners
+  // Throttled MutationObserver invalidates stale DOM signature when login/payment forms or iframes inject dynamically
+  if (typeof MutationObserver !== "undefined" && document.documentElement) {
+    const observer = new MutationObserver((mutations) => {
+      if (mutationScanCount >= 3) return;
+      let structuralChange = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes || []) {
+          if (node.nodeType !== 1) continue;
+          if (node.id === BANNER_ID) continue;
+          const tag = (node.tagName || "").toUpperCase();
+          if (["FORM", "IFRAME", "SCRIPT", "INPUT"].includes(tag) || (node.querySelector && node.querySelector("form, iframe, input[type='password']"))) {
+            structuralChange = true;
+            break;
+          }
+        }
+        if (structuralChange) break;
+      }
+      if (structuralChange) {
+        mutationScanCount++;
+        scheduleDebouncedScan(false, 1600);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
   scheduleDebouncedScan(false);
-  window.addEventListener("popstate", () => scheduleDebouncedScan(false));
+  window.addEventListener("popstate", () => { mutationScanCount = 0; scheduleDebouncedScan(false); });
   window.addEventListener("hashchange", () => scheduleDebouncedScan(false));
 })();

@@ -1,23 +1,23 @@
 """
-backend/risk_engine.py — Hybrid Multi-Layer Website Safety & Risk Fusion Engine
+backend/risk_engine.py — Hybrid Multi-Layer Website Safety & Risk Fusion Engine (v3.0)
 
 Combines separated assessments from:
-- Model 1: URL Risk Classifier
-- Model 2: DOM Behaviour Classifier
+- Model 1: URL Risk Classifier (calibrated ML probability + threshold)
+- Model 2: DOM Behaviour Classifier (calibrated ML probability + threshold)
 - Model 3: Brand Impersonation Detector
 - Model 4: Credential & Payment Risk Detector
 - Model 5: Threat Intelligence Engine
-- Transport Security (HTTPS / Mixed Content), Redirect Analysis & Domain Metadata
+- Transport Security (SECURE_HTTPS, HTTPS_MIXED_CONTENT, INSECURE_HTTP, INVALID_CERTIFICATE, UNKNOWN)
 
-Design Principles (Strict Rules Compliance):
-- Outputs standardized risk levels: LOW, MEDIUM, HIGH, CRITICAL, UNKNOWN.
-- Separates 6 distinct risk dimensions (connection_security, phishing_risk, malware_risk,
-  credential_risk, payment_risk, deceptive_behavior_risk).
-- Never equates HTTP alone with phishing.
-- Never equates advertisements/scripts alone with malware.
-- Never equates firewall/DNS blocking alone with malware.
-- Never assumes unknown domains absent from blocklists are safe.
-- Distinguishes ML model probabilities from heuristic multi-factor fusion scores.
+v3.0 Security Guarantees:
+- Strictly separates ML `phishing_probability` (None when unavailable) from `heuristic_risk_index`.
+- Removes whitelist score overrides (`is_whitelisted -> 0.02` eliminated): suspicious DOM, forms,
+  external credential harvesting, or threat feeds always elevate risk cleanly even on trusted domains.
+- Classifies loopback/private network targets explicitly as `LOCAL_NETWORK_UNVERIFIED` with `UNKNOWN` risk.
+- Separates transport security (`INVALID_CERTIFICATE`, `INSECURE_HTTP`) from phishing probability.
+- Separates operational states (`Malicious`, `Benign`, `Blocked`, `Unreachable`, `Insufficient evidence`, `Unknown`).
+- Distinguishes clearly between "No suspicious evidence observed", "Website not inspected",
+  "Model unavailable", "Insufficient evidence", and "Confirmed benign".
 """
 
 from __future__ import annotations
@@ -41,15 +41,8 @@ def _score_to_level(score: float | None, has_evidence: bool = True) -> str:
     return "LOW"
 
 
-def _highest_level(levels: list[str]) -> str:
-    order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}
-    if not levels:
-        return "UNKNOWN"
-    return max(levels, key=lambda lv: order.get(lv, 0))
-
-
 class HybridRiskEngine:
-    """Fuses ML model probabilities, rule detectors, and threat intel into multi-dimensional risk verdicts."""
+    """Fuses ML model probabilities, rule detectors, TLS/reachability, and threat intel."""
 
     def assess(
         self,
@@ -64,6 +57,9 @@ class HybridRiskEngine:
         is_whitelisted: bool = False,
         is_local: bool = False,
         has_dom_observation: bool = False,
+        reachability: dict | None = None,
+        model_availability: dict | None = None,
+        analysis_mode: str = "url_only",
     ) -> dict[str, Any]:
         parsed = urlparse(url or "")
         host = (hostname or parsed.hostname or "").lower().strip()
@@ -76,38 +72,71 @@ class HybridRiskEngine:
         intel = intel_result or {}
         reg = intel.get("registry_match") or {}
         forensics = intel.get("forensics") or {}
+        tls_info = intel.get("tls") or {}
+        reach = reachability or {}
+        avail = model_availability or {
+            "url_model": url_threat_prob is not None,
+            "dom_model": dom_threat_prob is not None,
+        }
 
         unavailable: list[str] = list(dom_norm.get("unavailable_signals", []))
         if not has_dom_observation and "dom_behavior" not in unavailable:
             unavailable.append("dom_behavior")
+        if url_threat_prob is None and "url_ml_model" not in unavailable:
+            unavailable.append("url_ml_model")
+        if has_dom_observation and dom_threat_prob is None and "dom_ml_model" not in unavailable:
+            unavailable.append("dom_ml_model")
         if not intel.get("rdap") or intel.get("rdap", {}).get("domain_age_days") is None:
             if "rdap_domain_age" not in unavailable:
                 unavailable.append("rdap_domain_age")
 
-        # Handle local development host cleanly
+        # ── Local / Private Network Target -> Never claim LOW/safe ───────────
         if is_local:
             return {
-                "overall_risk_level": "LOW",
-                "heuristic_risk_index": 2,
-                "url_model_threat_probability": 0.01,
-                "dom_model_threat_probability": 0.01 if has_dom_observation else None,
+                "overall_risk_level": "UNKNOWN",
+                "phishing_probability": None,
+                "heuristic_risk_index": None,
+                "confidence": 0.2,
+                "operational_status": "LOCAL_NETWORK_UNVERIFIED",
+                "connection_security": "LOCAL_NETWORK_UNVERIFIED",
+                "model_availability": avail,
+                "analysis_mode": "local_unverified",
+                "url_model_threat_probability": None,
+                "dom_model_threat_probability": None,
                 "dimensions": {
-                    "connection_security": {"level": "LOW" if is_https else "MEDIUM", "status": "LOCAL_DEV", "evidence": ["Local loopback or private network address."]},
-                    "phishing_risk": {"level": "LOW", "score": 0.01, "evidence": []},
-                    "malware_risk": {"level": "LOW", "score": 0.01, "evidence": []},
-                    "credential_risk": {"level": "LOW", "score": 0.01, "evidence": []},
-                    "payment_risk": {"level": "LOW", "score": 0.01, "evidence": []},
-                    "deceptive_behavior_risk": {"level": "LOW", "score": 0.01, "evidence": []},
+                    "connection_security": {
+                        "level": "UNKNOWN",
+                        "status": "LOCAL_NETWORK_UNVERIFIED",
+                        "evidence": ["Loopback or private RFC1918 address detected; external certificate and threat verification skipped."],
+                    },
+                    "phishing_risk": {"level": "UNKNOWN", "score": None, "evidence": ["Local target not evaluated by phishing models."]},
+                    "malware_risk": {"level": "UNKNOWN", "score": None, "evidence": ["Local target not scanned externally."]},
+                    "credential_risk": {"level": "UNKNOWN", "score": None, "evidence": []},
+                    "payment_risk": {"level": "UNKNOWN", "score": None, "evidence": []},
+                    "deceptive_behavior_risk": {"level": "UNKNOWN", "score": None, "evidence": []},
                 },
-                "evidence": ["Local development host detected."],
+                "brand_impersonation": {"brand_similarity_score": 0.0, "matched_brand": None, "evidence": []},
+                "evidence": [
+                    "Website not inspected: Target resolves to a loopback or private local network address (LOCAL_NETWORK_UNVERIFIED)."
+                ],
+                "reasoning": [
+                    "Private/local network targets cannot be verified via public threat intelligence or external scanning.",
+                    "Status is set to UNKNOWN (LOCAL_NETWORK_UNVERIFIED) rather than assuming safety.",
+                ],
                 "unavailable_signals": unavailable,
-                "recommended_action": "Safe local development environment.",
-                "assessment_confidence_note": "Local environment bypasses external threat feeds.",
+                "recommended_action": "Local or private network resource. Only proceed if you intentionally host or trust this local service.",
+                "assessment_confidence_note": "Website not inspected by external ML or threat feeds (LOCAL_NETWORK_UNVERIFIED).",
             }
 
-        # ── 1. Connection Security (Separated from Phishing!) ────────────────
+        # ── 1. Connection Security (Strictly separated from phishing ML probability)
         conn_evidence: list[str] = []
-        if is_https == 1 and mixed_content == 0:
+        ssl_error = bool(tls_info.get("ssl_error") or reach.get("ssl_error"))
+        if ssl_error:
+            conn_level = "HIGH"
+            conn_status = "INVALID_CERTIFICATE"
+            detail = tls_info.get("ssl_error_detail") or reach.get("network_error") or "Certificate validation failed."
+            conn_evidence.append(f"Invalid or untrusted TLS certificate ({detail}).")
+        elif is_https == 1 and mixed_content == 0:
             conn_level = "LOW"
             conn_status = "SECURE_HTTPS"
             conn_evidence.append("Page served over encrypted HTTPS connection.")
@@ -116,13 +145,12 @@ class HybridRiskEngine:
             conn_status = "HTTPS_MIXED_CONTENT"
             conn_evidence.append(f"HTTPS page loads {mixed_content} insecure HTTP subresource(s).")
         elif scheme == "http" or is_https == 0:
-            # Rule 9: HTTP alone is transport insecurity, NOT proof of phishing
             conn_level = "MEDIUM"
             conn_status = "INSECURE_HTTP"
             conn_evidence.append("Insecure HTTP transport (unencrypted connection; avoid entering sensitive credentials or payments).")
         else:
             conn_level = "UNKNOWN"
-            conn_status = "UNKNOWN_TRANSPORT"
+            conn_status = "UNKNOWN"
             conn_evidence.append("Transport protocol could not be confirmed.")
 
         # ── 2. Model 3: Brand Impersonation ──────────────────────────────────
@@ -136,7 +164,6 @@ class HybridRiskEngine:
         pay_score = float(cred_pay["payment_risk_score"])
         pay_evidence = list(cred_pay["payment_evidence"])
 
-        # Augment payment risk with server-side storefront forensics (only when commerce detected)
         if forensics.get("is_commerce_or_portal") and float(forensics.get("forensic_risk_score", 0.0)) > 0:
             f_risk = float(forensics.get("forensic_risk_score", 0.0))
             pay_score = max(pay_score, min(1.0, f_risk))
@@ -144,22 +171,33 @@ class HybridRiskEngine:
                 if fl not in pay_evidence:
                     pay_evidence.append(fl)
 
-        # ── 4. Phishing Risk ─────────────────────────────────────────────────
+        # ── 4. Calibrated ML Phishing Probability vs Heuristic Phishing Risk ─
+        ml_components: list[tuple[float, float]] = []
+        if url_threat_prob is not None:
+            ml_components.append((0.45 if dom_threat_prob is not None else 1.0, float(url_threat_prob)))
+        if dom_threat_prob is not None:
+            ml_components.append((0.55 if url_threat_prob is not None else 1.0, float(dom_threat_prob)))
+
+        if ml_components:
+            w_sum = sum(w for w, _ in ml_components)
+            ml_phishing_prob: float | None = round(sum(w * p for w, p in ml_components) / max(w_sum, 1e-9), 4)
+        else:
+            ml_phishing_prob = None
+
         phish_evidence: list[str] = []
         phish_signals: list[float] = []
         if url_threat_prob is not None:
             phish_signals.append(float(url_threat_prob))
             if float(url_threat_prob) >= 0.65:
-                phish_evidence.append(f"URL ML classifier flagged lexical/domain anomalies (model score={float(url_threat_prob):.2f}).")
+                phish_evidence.append(f"URL ML classifier flagged lexical/domain anomalies (model prob={float(url_threat_prob):.2f}).")
         if dom_threat_prob is not None:
             phish_signals.append(float(dom_threat_prob))
             if float(dom_threat_prob) >= 0.65:
-                phish_evidence.append(f"DOM behaviour ML classifier flagged structural/form anomalies (model score={float(dom_threat_prob):.2f}).")
+                phish_evidence.append(f"DOM behaviour ML classifier flagged structural/form anomalies (model prob={float(dom_threat_prob):.2f}).")
         if brand_score >= 0.80:
             phish_signals.append(brand_score)
             phish_evidence.extend(brand_info["evidence"])
 
-        # Threat intelligence integration (absent from feed != safe)
         reg_matched = bool(reg.get("matched"))
         reg_cat = str(reg.get("category") or "")
         reg_source = str(reg.get("source") or "")
@@ -173,18 +211,15 @@ class HybridRiskEngine:
                 phish_signals.append(float(reg.get("risk_floor", 0.92)))
                 phish_evidence.insert(0, f"Threat Intelligence ({reg_source}): {reg.get('reason')}")
 
-        if is_whitelisted and not reg_matched and cred_score < 0.40 and pay_score < 0.40:
-            phish_score = 0.02
-            phish_evidence = ["Verified authorized domain in trusted security registry."]
-        elif phish_signals:
-            phish_score = max(phish_signals) if reg_matched else sum(phish_signals) / len(phish_signals)
+        if phish_signals:
+            phish_score: float | None = max(phish_signals) if reg_matched else sum(phish_signals) / len(phish_signals)
             if url_threat_prob is not None and dom_threat_prob is not None:
                 if url_threat_prob >= 0.60 and dom_threat_prob >= 0.60:
                     phish_score = max(phish_score, 0.82)
         else:
             phish_score = None
 
-        # ── 5. Malware Risk (Rule 10 & 11 compliant) ─────────────────────────
+        # ── 5. Malware Risk ──────────────────────────────────────────────────
         malware_evidence: list[str] = []
         malware_score = 0.0
         if reg_matched and ("malware" in reg_cat or reg_source in ("urlhaus", "hagezi_tif")):
@@ -207,7 +242,7 @@ class HybridRiskEngine:
             malware_evidence.append("High-entropy obfuscated inline JavaScript detected.")
         malware_score = round(min(1.0, malware_score), 4)
 
-        # ── 6. Deceptive Behaviour Risk (Redirects, Popups, Hidden Iframes) ──
+        # ── 6. Deceptive Behaviour Risk ──────────────────────────────────────
         dec_evidence: list[str] = []
         dec_score = 0.0
         hidden_ifr = int(dom_norm.get("num_hidden_iframes", 0))
@@ -239,14 +274,19 @@ class HybridRiskEngine:
             dec_evidence.append(f"High proportion of dummy/javascript links ({susp_link_ratio:.0%}).")
         dec_score = round(min(1.0, dec_score), 4)
 
-        # ── 7. Dimension Levels & Overall Risk Assessment ────────────────────
+        # ── 7. Operational Reachability & Firewall Checks ────────────────────
+        is_blocked_fw = bool(reach.get("dns_sinkholed") or reach.get("firewall_block_page"))
+        is_unreachable = bool(reach.get("connection_blocked") and not is_blocked_fw)
+        if is_blocked_fw:
+            dec_evidence.append("Network firewall/DNS sinkhole blocked access to destination (not proof of ML phishing).")
+
+        # ── 8. Dimension Levels & Overall Risk Assessment ────────────────────
         phish_level = _score_to_level(phish_score, has_evidence=(phish_score is not None))
         malware_level = _score_to_level(malware_score, has_evidence=(has_dom_observation or reg_matched))
         cred_level = _score_to_level(cred_score, has_evidence=has_dom_observation or bool(cred_evidence))
         pay_level = _score_to_level(pay_score, has_evidence=has_dom_observation or bool(pay_evidence))
         dec_level = _score_to_level(dec_score, has_evidence=has_dom_observation or ext_redirects > 0)
 
-        # Overall risk level logic (LOW, MEDIUM, HIGH, CRITICAL, UNKNOWN)
         threat_dims = [phish_level, malware_level, cred_level, pay_level, dec_level]
         num_elevated = sum(1 for lv in threat_dims if lv in ("MEDIUM", "HIGH", "CRITICAL"))
 
@@ -254,31 +294,91 @@ class HybridRiskEngine:
             overall = "CRITICAL"
         elif "CRITICAL" in threat_dims:
             overall = "CRITICAL"
-        elif "HIGH" in threat_dims or num_elevated >= 2:
+        elif "HIGH" in threat_dims or conn_level == "HIGH" or num_elevated >= 2:
             overall = "HIGH"
         elif "MEDIUM" in threat_dims or conn_level == "MEDIUM":
             overall = "MEDIUM"
-        elif phish_score is None and not has_dom_observation and not is_whitelisted:
+        elif (
+            (phish_score is None and not has_dom_observation)
+            or (is_blocked_fw and not reg_matched and phish_level == "UNKNOWN")
+            or (is_unreachable and not reg_matched and phish_level == "UNKNOWN")
+        ):
             overall = "UNKNOWN"
         else:
             overall = "LOW"
 
-        # Heuristic risk index (0-100) clearly distinguished from statistical ML probability
+        # Separate Heuristic Risk Index (0..100) from calibrated ML phishing_probability
         numeric_subs = [
             x for x in (phish_score, malware_score, cred_score, pay_score, dec_score)
             if x is not None
         ]
+        if conn_status == "INVALID_CERTIFICATE":
+            numeric_subs.append(0.70)
         max_sub = max(numeric_subs) if numeric_subs else 0.0
         mean_top2 = sum(sorted(numeric_subs, reverse=True)[:2]) / max(1, min(2, len(numeric_subs))) if numeric_subs else 0.0
         heuristic_index = int(round(min(100.0, max(max_sub, 0.7 * max_sub + 0.3 * mean_top2) * 100.0)))
         if overall == "MEDIUM" and conn_level == "MEDIUM" and heuristic_index < 35:
             heuristic_index = 35
+        if overall == "HIGH" and conn_level == "HIGH" and heuristic_index < 65:
+            heuristic_index = 65
+
+        # Operational status & confidence (clearly separating evidence levels)
+        if overall in ("HIGH", "CRITICAL") and (
+            reg_matched or phish_level in ("HIGH", "CRITICAL") or malware_level in ("HIGH", "CRITICAL")
+            or cred_level in ("HIGH", "CRITICAL") or pay_level in ("HIGH", "CRITICAL")
+        ):
+            operational_status = "Malicious"
+        elif is_blocked_fw:
+            operational_status = "Blocked"
+        elif is_unreachable:
+            operational_status = "Unreachable"
+        elif overall == "UNKNOWN" or (not has_dom_observation and not reg_matched and ml_phishing_prob is None):
+            operational_status = "Insufficient evidence"
+        elif overall in ("LOW", "MEDIUM") and has_dom_observation and ml_phishing_prob is not None:
+            operational_status = "Benign"
+        else:
+            operational_status = "Insufficient evidence" if overall == "UNKNOWN" else "Benign"
+
+        conf = 0.35
+        if ml_phishing_prob is not None:
+            conf += 0.25
+        if has_dom_observation:
+            conf += 0.25
+        if reg_matched or is_whitelisted:
+            conf += 0.10
+        if conn_status in ("INVALID_CERTIFICATE",):
+            conf = max(conf, 0.80)
+        if operational_status in ("Blocked", "Unreachable", "Insufficient evidence"):
+            conf = min(conf, 0.55)
+        conf = round(min(0.99, conf), 3)
 
         all_evidence: list[str] = []
         for ev_list in (phish_evidence, malware_evidence, cred_evidence, pay_evidence, dec_evidence, conn_evidence):
             for item in ev_list:
                 if item not in all_evidence:
                     all_evidence.append(item)
+
+        if is_whitelisted and not reg_matched and cred_score < 0.35 and pay_score < 0.35 and phish_level in ("LOW", "UNKNOWN"):
+            note = "Established domain present on reference reputation allowlist; DOM/heuristic scans were NOT bypassed."
+            if note not in all_evidence:
+                all_evidence.append(note)
+
+        reasoning: list[str] = []
+        if operational_status == "Malicious":
+            reasoning.append("Strong malicious or high-risk behavioural/intelligence indicators observed.")
+        elif operational_status == "Blocked":
+            reasoning.append("Target appears blocked by DNS sinkhole or firewall policy rather than verified safe.")
+        elif operational_status == "Unreachable":
+            reasoning.append("Host unreachable or timed out; structural inspection could not be completed.")
+        elif operational_status == "Insufficient evidence":
+            if ml_phishing_prob is None:
+                reasoning.append("Model unavailable or DOM not observed — insufficient evidence to confirm benign status.")
+            else:
+                reasoning.append("Insufficient evidence: live DOM inspection not available.")
+        elif is_whitelisted and has_dom_observation:
+            reasoning.append("Confirmed benign: reference reputation and live URL/DOM inspection showed no suspicious indicators.")
+        else:
+            reasoning.append("No suspicious evidence observed across evaluated URL and DOM layers.")
 
         if overall == "CRITICAL":
             action = "Do not enter credentials, download files, or make payments. Leave this website immediately."
@@ -289,11 +389,17 @@ class HybridRiskEngine:
         elif overall == "UNKNOWN":
             action = "Insufficient structural or domain evidence to verify safety. Exercise caution before sharing data."
         else:
-            action = "No significant risk indicators observed across inspected URL, DOM, and reputation checks."
+            action = "No suspicious evidence observed across inspected URL, DOM, and reputation checks."
 
         return {
             "overall_risk_level": overall,
+            "phishing_probability": ml_phishing_prob,
             "heuristic_risk_index": heuristic_index,
+            "confidence": conf,
+            "operational_status": operational_status,
+            "connection_security": conn_status,
+            "model_availability": avail,
+            "analysis_mode": analysis_mode,
             "url_model_threat_probability": round(float(url_threat_prob), 4) if url_threat_prob is not None else None,
             "dom_model_threat_probability": round(float(dom_threat_prob), 4) if dom_threat_prob is not None else None,
             "dimensions": {
@@ -306,10 +412,11 @@ class HybridRiskEngine:
             },
             "brand_impersonation": brand_info,
             "evidence": all_evidence,
+            "reasoning": reasoning,
             "unavailable_signals": unavailable,
             "recommended_action": action,
             "assessment_confidence_note": (
-                "Heuristic risk index reflects multi-layer signal fusion; URL/DOM probabilities are separate ML classifier outputs."
+                f"operational_status={operational_status}; phishing_probability={'null (model unavailable)' if ml_phishing_prob is None else ml_phishing_prob}; "
+                f"heuristic_risk_index={heuristic_index}/100 (distinct from ML probability)."
             ),
         }
-

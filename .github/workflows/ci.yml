@@ -27,16 +27,16 @@ jobs:
       - name: Run automated test suite
         run: pytest -v tests/
 
-      - name: Verify Chrome extension JSON & JS syntax
+      - name: Verify Chrome extension JSON & JS syntax + utils
         uses: actions/setup-node@v4
         with:
           node-version: "20"
       - run: |
           python -m json.tool chrome_extension/manifest.json > /dev/null
+          node --check chrome_extension/utils.js
           node --check chrome_extension/content.js
           node --check chrome_extension/background.js
           node --check chrome_extension/popup.js
 
       - name: Build Docker image
         run: docker build -t webshield-api:ci .
-

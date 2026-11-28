@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "WebShield AI — Website Safety & Trust Assessment",
-  "version": "2.0.0",
-  "description": "Multi-layer AI website safety assessment analyzing URLs, DOM behaviour, brand impersonation, credential & payment risks, and threat intelligence.",
+  "version": "3.0.0",
+  "description": "Multi-layer AI website safety assessment analyzing calibrated URL/DOM ML scores, brand impersonation, credential & payment risks, TLS security, and threat intelligence.",
 
   "permissions": [
     "activeTab",
@@ -24,7 +24,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
+      "js": ["utils.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
@@ -37,7 +37,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "WebShield AI — Website Safety"
+    "default_title": "WebShield AI — Website Safety (v3.0)"
   },
 
   "icons": {

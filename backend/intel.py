@@ -1,41 +1,59 @@
 """
-backend/intel.py — Threat Intelligence & Domain Metadata Engine (Model 5)
+backend/intel.py — Threat Intelligence, Feed Freshness & Domain Metadata Engine (v3.0)
 
 Combines:
-1. O(1) lookups against verified threat feeds (OpenPhish, HaGeZi Fake/TIF, CERT.pl,
-   Phishing.Database, Scam-Blocklist, optional PhishTank/URLhaus)
-2. Tranco Top-1M popularity context (never equates absence with malice or presence alone as safe)
-3. SSRF-safe live storefront/HTML inspection (via backend.security.safe_fetch_html)
-4. Graceful RDAP domain-age & TLS certificate metadata checks (missing RDAP/DNS never treated as proof of malice)
+1. O(1) lookups against verified threat feeds with explicit timestamps, expiration TTL,
+   reliability ratings, and transparent failure reporting (never silently reports loaded when missing/corrupt)
+2. Tranco Top-1M popularity context (never equates absence with malice or hosted user content as trusted)
+3. SSRF-safe live storefront/HTML inspection (via pinned-IP backend.security.safe_fetch_html)
+4. Graceful RDAP domain-age & strict TLS certificate verification checks
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import gzip
 import json
 import logging
 import os
+import threading
 import time
 from urllib.parse import urlparse
 
 import pandas as pd
 from dotenv import load_dotenv
 
-from backend.security import SSRFBlockedError, safe_fetch_html
-from src.features import TRUSTED_DOMAINS, detect_brand_impersonation, extract_root_domain
+from backend.security import PayloadTooLargeError, SSRFBlockedError, safe_fetch_html
+from src.features import (
+    TRUSTED_DOMAINS,
+    detect_brand_impersonation,
+    extract_root_domain,
+    is_hosted_user_content_subdomain,
+)
 from src.web_forensics import analyze_storefront_forensics, inspect_rdap_domain, inspect_tls_certificate
 
 load_dotenv(override=True)
 logger = logging.getLogger("PhishingAPI.Intel")
 
+DEFAULT_FEED_TTL_SECONDS = int(os.getenv("INTEL_FEED_TTL_SECONDS", str(86400 * 7)))
+MAX_LIVE_CACHE_ENTRIES = 2000
+
 
 class UnauthorizedIntelEngine:
-    """Thread-safe threat intelligence, domain metadata, and storefront forensics engine."""
+    """Thread-safe threat intelligence engine with feed provenance, freshness TTL, and bounded caches."""
 
-    def __init__(self, dataset_dir: str = "dataset", cache_ttl_seconds: int = 3600):
+    def __init__(
+        self,
+        dataset_dir: str = "dataset",
+        intel_dir: str = "data/intel",
+        cache_ttl_seconds: int = 3600,
+        feed_ttl_seconds: int = DEFAULT_FEED_TTL_SECONDS,
+    ):
         self.dataset_dir = dataset_dir
+        self.intel_dir = intel_dir
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.feed_ttl_seconds = feed_ttl_seconds
 
         self.verified_sites: dict[str, dict] = {
             "vlebazaar.in": {
@@ -54,12 +72,52 @@ class UnauthorizedIntelEngine:
         self.tranco_ranks: dict[str, int] = {}
 
         self._live_cache: dict[str, tuple[float, dict]] = {}
+        self._cache_lock = threading.Lock()
+        self._catalog_df: pd.DataFrame | None = None
+
         self.loaded = False
+        self.degraded = False
+        self.stale = False
         self.last_loaded_at: float | None = None
+        self.feed_updated_at: str | None = None
+        self.feed_expires_at: str | None = None
+        self.load_errors: list[str] = []
+        self.feed_metadata: dict[str, dict] = {}
+
+    def _record_feed_meta(self, name: str, path: str, count: int, reliability: str, ok: bool, error: str | None = None):
+        now = time.time()
+        mtime = os.path.getmtime(path) if os.path.exists(path) else now
+        age_sec = max(0.0, now - mtime)
+        expired = age_sec > float(self.feed_ttl_seconds) if os.path.exists(path) else False
+        updated_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat() if os.path.exists(path) else None
+        expires_iso = (
+            datetime.fromtimestamp(mtime + self.feed_ttl_seconds, tz=timezone.utc).isoformat()
+            if os.path.exists(path)
+            else None
+        )
+        self.feed_metadata[name] = {
+            "loaded": ok,
+            "count": int(count),
+            "reliability": reliability,
+            "updated_at": updated_iso,
+            "expires_at": expires_iso,
+            "expired": expired,
+            "error": error,
+        }
+        if expired:
+            self.stale = True
+        if error:
+            self.load_errors.append(error)
 
     def load(self):
-        """Load compressed domain intelligence indexes and Tranco rankings into memory."""
+        """Load compressed threat intelligence indexes, catalog cache, and feed freshness metadata."""
+        self.load_errors = []
+        self.feed_metadata = {}
+        self.degraded = False
+        self.stale = False
+
         idx_path = os.path.join(self.dataset_dir, "unauthorized_domains.json.gz")
+        idx_ok = False
         if os.path.exists(idx_path):
             try:
                 t0 = time.time()
@@ -72,6 +130,12 @@ class UnauthorizedIntelEngine:
                 self.cert_pl = set(data.get("cert_pl", []))
                 self.openphish_domains = set(data.get("openphish_domains", []))
                 self.jarelllama_scams = set(data.get("jarelllama_scams", []))
+                idx_ok = True
+                total_domains = (
+                    len(self.verified_sites) + len(self.hagezi_fake) + len(self.hagezi_tif)
+                    + len(self.phishing_database) + len(self.cert_pl) + len(self.openphish_domains)
+                )
+                self._record_feed_meta("unauthorized_domains", idx_path, total_domains, "high", True)
                 logger.info(
                     f"Loaded threat intelligence in {time.time() - t0:.2f}s: "
                     f"verified={len(self.verified_sites)}, hagezi_fake={len(self.hagezi_fake):,}, "
@@ -79,24 +143,62 @@ class UnauthorizedIntelEngine:
                     f"cert_pl={len(self.cert_pl):,}, openphish={len(self.openphish_domains):,}"
                 )
             except Exception as e:
-                logger.warning(f"Failed loading {idx_path}: {e}")
+                err = f"Failed loading threat intelligence index {idx_path}: {e}"
+                logger.warning(err)
+                self._record_feed_meta("unauthorized_domains", idx_path, 0, "high", False, err)
         else:
-            logger.warning(f"Threat intelligence index not found at {idx_path}. Operating with built-in baseline.")
+            err = f"Threat intelligence index missing at {idx_path}."
+            logger.warning(err)
+            self._record_feed_meta("unauthorized_domains", idx_path, 0, "high", False, err)
 
         tranco_path = os.path.join(self.dataset_dir, "tranco_top1m.json.gz")
+        tranco_ok = False
         if os.path.exists(tranco_path):
             try:
                 with gzip.open(tranco_path, "rt", encoding="utf-8") as gz:
                     self.tranco_ranks = json.load(gz)
+                tranco_ok = True
+                self._record_feed_meta("tranco_top1m", tranco_path, len(self.tranco_ranks), "medium_reputation_only", True)
             except Exception as e:
-                logger.warning(f"Failed loading {tranco_path}: {e}")
+                err = f"Failed loading Tranco index {tranco_path}: {e}"
+                logger.warning(err)
+                self._record_feed_meta("tranco_top1m", tranco_path, 0, "medium_reputation_only", False, err)
+        else:
+            err = f"Tranco index missing at {tranco_path}."
+            logger.warning(err)
+            self._record_feed_meta("tranco_top1m", tranco_path, 0, "medium_reputation_only", False, err)
 
-        self.loaded = True
+        # Pre-cache discovered unauthorized catalog CSV once so /intel/search never hits disk per query
+        cat_path = os.path.join(self.dataset_dir, "discovered_unauthorized_sites.csv")
+        if os.path.exists(cat_path):
+            try:
+                self._catalog_df = pd.read_csv(cat_path)
+                self._record_feed_meta("discovered_catalog", cat_path, len(self._catalog_df), "verified_catalog", True)
+            except Exception as e:
+                self.load_errors.append(f"Failed loading catalog {cat_path}: {e}")
+                self._catalog_df = None
+
         self.last_loaded_at = time.time()
+        self.loaded = idx_ok and tranco_ok
+        self.degraded = not self.loaded or self.stale or bool(self.load_errors)
+        meta_idx = self.feed_metadata.get("unauthorized_domains", {})
+        self.feed_updated_at = meta_idx.get("updated_at")
+        self.feed_expires_at = meta_idx.get("expires_at")
 
     def status_summary(self) -> dict:
         return {
             "loaded": self.loaded,
+            "degraded": self.degraded,
+            "stale": self.stale,
+            "last_loaded_at": (
+                datetime.fromtimestamp(self.last_loaded_at, tz=timezone.utc).isoformat()
+                if self.last_loaded_at
+                else None
+            ),
+            "feed_updated_at": self.feed_updated_at,
+            "feed_expires_at": self.feed_expires_at,
+            "errors": list(self.load_errors),
+            "feeds": dict(self.feed_metadata),
             "verified_count": len(self.verified_sites),
             "hagezi_fake_count": len(self.hagezi_fake),
             "hagezi_tif_count": len(self.hagezi_tif),
@@ -108,9 +210,15 @@ class UnauthorizedIntelEngine:
         }
 
     def is_trusted(self, hostname: str) -> bool:
+        """
+        Return True ONLY if hostname/registered domain is in TRUSTED_DOMAINS AND NOT a multi-tenant
+        hosted user-content subdomain (e.g., sites.google.com, storage.googleapis.com).
+        """
         h = (hostname or "").lower().strip().rstrip(".")
         if ":" in h:
             h = h.split(":", 1)[0]
+        if not h or is_hosted_user_content_subdomain(h):
+            return False
         root = extract_root_domain(h)
         return h in TRUSTED_DOMAINS or root in TRUSTED_DOMAINS
 
@@ -118,6 +226,8 @@ class UnauthorizedIntelEngine:
         h = (hostname or "").lower().strip().rstrip(".")
         if ":" in h:
             h = h.split(":", 1)[0]
+        if not h or is_hosted_user_content_subdomain(h):
+            return self.tranco_ranks.get(h)
         root = extract_root_domain(h)
         return self.tranco_ranks.get(h) or self.tranco_ranks.get(root)
 
@@ -128,7 +238,10 @@ class UnauthorizedIntelEngine:
             h = h.split(":", 1)[0]
         root = extract_root_domain(h)
 
-        for candidate in (h, root):
+        # Avoid flagging legitimate root provider (e.g. google.com) for user-content subdomains
+        candidates = (h,) if is_hosted_user_content_subdomain(h) else (h, root)
+
+        for candidate in candidates:
             if not candidate:
                 continue
             if candidate in self.verified_sites:
@@ -139,6 +252,7 @@ class UnauthorizedIntelEngine:
                     "category": meta.get("category", "payment_risk"),
                     "reason": meta.get("reason", "Confirmed fraud/scam entry."),
                     "risk_floor": 0.94,
+                    "reliability": "high",
                 }
             if candidate in self.openphish_domains:
                 return {
@@ -147,6 +261,7 @@ class UnauthorizedIntelEngine:
                     "category": "phishing",
                     "reason": f"Domain '{candidate}' is listed in the active OpenPhish feed.",
                     "risk_floor": 0.95,
+                    "reliability": "high",
                 }
             if candidate in self.cert_pl:
                 return {
@@ -155,6 +270,7 @@ class UnauthorizedIntelEngine:
                     "category": "phishing",
                     "reason": f"Domain '{candidate}' is flagged in the CERT.pl malicious domain feed.",
                     "risk_floor": 0.94,
+                    "reliability": "high",
                 }
             if candidate in self.hagezi_fake:
                 return {
@@ -163,6 +279,7 @@ class UnauthorizedIntelEngine:
                     "category": "fake_shop_or_scam",
                     "reason": f"Domain '{candidate}' is flagged in the HaGeZi Fake/Scam storefront feed.",
                     "risk_floor": 0.92,
+                    "reliability": "medium",
                 }
             if candidate in self.phishing_database:
                 return {
@@ -171,6 +288,7 @@ class UnauthorizedIntelEngine:
                     "category": "phishing",
                     "reason": f"Domain '{candidate}' appears in the active Phishing.Database feed.",
                     "risk_floor": 0.92,
+                    "reliability": "high",
                 }
             if candidate in self.hagezi_tif:
                 return {
@@ -179,6 +297,7 @@ class UnauthorizedIntelEngine:
                     "category": "malware_distribution",
                     "reason": f"Domain '{candidate}' appears in the HaGeZi Threat Intelligence Feed.",
                     "risk_floor": 0.91,
+                    "reliability": "medium",
                 }
             if candidate in self.jarelllama_scams:
                 return {
@@ -187,9 +306,10 @@ class UnauthorizedIntelEngine:
                     "category": "scam_blocklist",
                     "reason": f"Domain '{candidate}' is listed in the Scam-Blocklist feed.",
                     "risk_floor": 0.88,
+                    "reliability": "medium",
                 }
 
-        return {"matched": False, "source": None, "category": None, "reason": None, "risk_floor": 0.0}
+        return {"matched": False, "source": None, "category": None, "reason": None, "risk_floor": 0.0, "reliability": None}
 
     def inspect_domain(
         self,
@@ -201,8 +321,7 @@ class UnauthorizedIntelEngine:
     ) -> dict:
         """
         Gather threat intelligence, Tranco rank, brand similarity, RDAP age, TLS info,
-        and SSRF-safe storefront forensics. Missing RDAP/DNS is disclosed gracefully and
-        never assumed to prove malicious intent.
+        and SSRF-safe storefront forensics.
         """
         parsed = urlparse(url) if url else None
         host = (hostname or (parsed.hostname if parsed else "") or "").lower().strip().rstrip(".")
@@ -240,7 +359,8 @@ class UnauthorizedIntelEngine:
 
         now = time.time()
         cache_key = root or host
-        cached = self._live_cache.get(cache_key)
+        with self._cache_lock:
+            cached = self._live_cache.get(cache_key)
         if cached and (now - cached[0]) < self.cache_ttl_seconds:
             live_data = cached[1]
         else:
@@ -254,7 +374,11 @@ class UnauthorizedIntelEngine:
                 forensics_info = fut_html.result()
 
             live_data = {"rdap": rdap_info, "tls": tls_info, "forensics": forensics_info}
-            self._live_cache[cache_key] = (now, live_data)
+            with self._cache_lock:
+                if len(self._live_cache) >= MAX_LIVE_CACHE_ENTRIES:
+                    oldest_key = min(self._live_cache.items(), key=lambda kv: kv[1][0])[0]
+                    del self._live_cache[oldest_key]
+                self._live_cache[cache_key] = (now, live_data)
 
         result["rdap"] = live_data["rdap"]
         result["tls"] = live_data["tls"]
@@ -266,6 +390,11 @@ class UnauthorizedIntelEngine:
                 f"Recently Registered Domain: Created {age_days} days ago ({live_data['rdap'].get('created_date')})."
             )
 
+        if live_data["tls"].get("ssl_error"):
+            result["indicators"].append(
+                f"TLS Certificate Verification Failure: {live_data['tls'].get('ssl_error_detail') or 'Invalid or untrusted certificate'}."
+            )
+
         for fl in live_data["forensics"].get("forensic_flags", []):
             if fl not in result["indicators"]:
                 result["indicators"].append(fl)
@@ -274,15 +403,21 @@ class UnauthorizedIntelEngine:
 
     @staticmethod
     def _safe_fetch_and_forensics(url: str) -> dict:
-        """SSRF-protected page fetch and storefront forensics (gracefully returns empty on block/timeout)."""
+        """SSRF-protected page fetch and storefront forensics."""
         try:
-            final_url, status, html, redirect_chain = safe_fetch_html(url, timeout=4.0, max_bytes=400_000, max_redirects=3)
+            final_url, status, html, redirect_chain = safe_fetch_html(
+                url,
+                timeout=4.0,
+                max_bytes=400_000,
+                max_decompressed_bytes=1_000_000,
+                max_redirects=3,
+            )
             if status < 400 and html and len(html) >= 200:
                 forensics = analyze_storefront_forensics(final_url, html, follow_policy_pages=False, timeout=2.0)
                 forensics["redirect_chain"] = redirect_chain
                 return forensics
-        except SSRFBlockedError as se:
-            logger.info(f"SSRF or DNS validation blocked fetch for {url}: {se}")
+        except (SSRFBlockedError, PayloadTooLargeError) as se:
+            logger.info(f"Safe fetch blocked or limited for {url}: {se}")
         except Exception:
             pass
         return {
@@ -293,11 +428,14 @@ class UnauthorizedIntelEngine:
         }
 
     def search_catalog(self, query: str = "", category: str = "", limit: int = 50) -> list[dict]:
-        """Search discovered unauthorized websites catalog CSV if present."""
-        cat_path = os.path.join(self.dataset_dir, "discovered_unauthorized_sites.csv")
-        if not os.path.exists(cat_path):
-            return []
-        df = pd.read_csv(cat_path)
+        """Search cached discovered unauthorized websites catalog."""
+        if self._catalog_df is None:
+            cat_path = os.path.join(self.dataset_dir, "discovered_unauthorized_sites.csv")
+            if not os.path.exists(cat_path):
+                return []
+            self._catalog_df = pd.read_csv(cat_path)
+
+        df = self._catalog_df
         if query:
             q = query.strip().lower()
             mask = (

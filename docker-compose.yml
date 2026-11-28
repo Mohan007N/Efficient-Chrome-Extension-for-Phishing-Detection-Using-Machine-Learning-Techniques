@@ -10,11 +10,18 @@ services:
     environment:
       - PORT=8000
       - DOCKER_ENV=1
+      - STRICT_CORS=1
     volumes:
       - ./models:/app/models
       - ./dataset:/app/dataset
       - ./data:/app/data
       - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; d=json.loads(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()); assert d['url_model_loaded'] and d['dom_model_loaded']"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
   mlflow:

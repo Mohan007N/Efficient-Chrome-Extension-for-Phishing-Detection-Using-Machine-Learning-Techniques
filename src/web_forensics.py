@@ -21,6 +21,14 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
+from backend.security import (
+    PayloadTooLargeError,
+    SSRFBlockedError,
+    is_forbidden_ip,
+    safe_decompress_gzip,
+    safe_fetch_bytes,
+    validate_safe_url,
+)
 from src.features import detect_brand_impersonation, extract_root_domain
 
 DEFAULT_HEADERS = {
@@ -68,15 +76,17 @@ FIREWALL_BLOCK_PATTERNS = (
 
 def inspect_dns_and_reachability(url: str, hostname: str, timeout: float = 3.5) -> dict:
     """
-    Probe DNS resolution and live HTTP/TLS reachability to detect:
+    Probe DNS resolution and SSRF-safe live HTTP/TLS reachability to detect:
     - DNS sinkholes / NXDOMAIN (firewall/ISP DNS blocking)
+    - Private/local network destinations (flagged, never fetched via SSRF)
     - Firewall / security block pages (HTTP 200/403/451 block notices)
-    - SSL/TLS verification errors or reset/refused connections
+    - Invalid/self-signed/mismatched SSL/TLS certificates or reset/refused connections
     """
     clean_host = (hostname or "").lower().strip().split(":", 1)[0]
     res = {
         "dns_resolved": False,
         "dns_sinkholed": False,
+        "private_network_target": False,
         "resolved_ips": [],
         "http_status": None,
         "final_url": url,
@@ -92,32 +102,40 @@ def inspect_dns_and_reachability(url: str, hostname: str, timeout: float = 3.5) 
     # 1. DNS check
     try:
         infos = socket.getaddrinfo(clean_host, None)
-        ips = sorted({item[4][0] for item in infos if item[4]})
+        ips = sorted({str(item[4][0]).split("%", 1)[0] for item in infos if item[4]})
         res["resolved_ips"] = ips[:5]
         res["dns_resolved"] = len(ips) > 0
         if any(ip in ("0.0.0.0", "::", "::1") or ip.startswith("127.") for ip in ips):
             res["dns_sinkholed"] = True
+        elif any(is_forbidden_ip(ip) for ip in ips):
+            res["private_network_target"] = True
     except Exception as e:
         res["network_error"] = f"DNS failure: {e}"
         return res
 
-    if res["dns_sinkholed"]:
+    if res["dns_sinkholed"] or res["private_network_target"]:
         return res
 
-    # 2. HTTP + TLS fetch (inspecting error bodies for firewall block pages too)
+    # 2. SSRF-safe pinned-IP HTTP + TLS fetch (inspecting error bodies for firewall block pages too)
     target = url if (url and url.startswith(("http://", "https://"))) else f"https://{clean_host}/"
     try:
         final_url, status, html = fetch_url_html(target, timeout=timeout, max_bytes=350_000)
         res["final_url"] = final_url or target
         res["http_status"] = status
         res["html"] = html
+    except PayloadTooLargeError as pe:
+        res["connection_blocked"] = True
+        res["network_error"] = str(pe)
+    except SSRFBlockedError as se:
+        res["private_network_target"] = True
+        res["network_error"] = f"Blocked target resolution: {se}"
     except urllib.error.HTTPError as he:
         res["http_status"] = int(getattr(he, "code", 403) or 403)
         try:
             raw = he.read(150_000)
             enc = (he.headers.get("Content-Encoding") or "").lower()
             if "gzip" in enc:
-                raw = gzip.decompress(raw)
+                raw = safe_decompress_gzip(raw, max_decompressed_bytes=400_000)
             res["html"] = raw.decode("utf-8", errors="ignore")
         except Exception:
             pass
@@ -132,7 +150,11 @@ def inspect_dns_and_reachability(url: str, hostname: str, timeout: float = 3.5) 
             res["connection_blocked"] = True
         res["network_error"] = f"Network/connection error: {ue.reason}"
     except Exception as e:
-        res["connection_blocked"] = True
+        err_low = str(e).lower()
+        if "ssl" in err_low or "certificate" in err_low:
+            res["ssl_error"] = True
+        else:
+            res["connection_blocked"] = True
         res["network_error"] = f"Connection blocked or timed out: {e}"
 
     if res["html"]:
@@ -144,21 +166,18 @@ def inspect_dns_and_reachability(url: str, hostname: str, timeout: float = 3.5) 
 
 
 def fetch_url_bytes(url: str, timeout: float = 8.0, max_bytes: int = 800_000) -> tuple[str, int, bytes]:
-    """Fetch URL with gzip decompression and redirect tracking."""
-    req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read(max_bytes)
-        enc = (resp.headers.get("Content-Encoding") or "").lower()
-        if "gzip" in enc:
-            try:
-                raw = gzip.decompress(raw)
-            except Exception:
-                pass
-        return resp.geturl(), int(getattr(resp, "status", 200) or 200), raw
+    """SSRF-safe URL byte fetch routed through pinned-IP handler and bounded gzip decompression."""
+    final_url, status, raw, _ = safe_fetch_bytes(
+        url,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        max_decompressed_bytes=max(max_bytes * 2, 1_500_000),
+    )
+    return final_url, status, raw
 
 
 def fetch_url_html(url: str, timeout: float = 6.0, max_bytes: int = 450_000) -> tuple[str, int, str]:
-    """Fetch a webpage and return (final_url, status_code, decoded_html)."""
+    """Fetch a webpage safely and return `(final_url, status_code, decoded_html)`."""
     final_url, status, raw = fetch_url_bytes(url, timeout=timeout, max_bytes=max_bytes)
     return final_url, status, raw.decode("utf-8", errors="ignore")
 
@@ -391,10 +410,15 @@ def inspect_rdap_domain(hostname: str, timeout: float = 2.5) -> dict:
 
 
 def inspect_tls_certificate(hostname: str, timeout: float = 2.5) -> dict:
-    """Inspect a host's TLS certificate issuer and validity window via direct SSL socket."""
+    """
+    Inspect a host's TLS certificate issuer, validity window, and certificate verification status.
+    Connects only to validated public IPs (pinned IP) with strict hostname verification.
+    """
     clean_host = (hostname or "").lower().strip().split(":", 1)[0]
     info = {
         "tls_checked": False,
+        "ssl_error": False,
+        "ssl_error_detail": None,
         "issuer_org": None,
         "subject_org": None,
         "cert_validity_days": None,
@@ -404,8 +428,18 @@ def inspect_tls_certificate(hostname: str, timeout: float = 2.5) -> dict:
         return info
 
     try:
+        from backend.security import validate_safe_url_and_resolve
+        _, ips = validate_safe_url_and_resolve(f"https://{clean_host}/", resolve_dns=True)
+        pinned_ip = ips[0] if ips else clean_host
+    except Exception as se:
+        info["ssl_error_detail"] = f"Target validation blocked TLS check: {se}"
+        return info
+
+    try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((clean_host, 443), timeout=timeout) as sock:
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        with socket.create_connection((pinned_ip, 443), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=clean_host) as ssock:
                 cert = ssock.getpeercert()
         if not cert:
@@ -428,8 +462,14 @@ def inspect_tls_certificate(hostname: str, timeout: float = 2.5) -> dict:
             iss_l = (info["issuer_org"] or "").lower()
             if span <= 95 and not info["subject_org"] and any(ca in iss_l for ca in ("let's encrypt", "zerossl", "google trust", "cloudflare", "sectigo")):
                 info["is_dv_short_lived"] = True
-    except Exception:
-        pass
+    except ssl.SSLCertVerificationError as ce:
+        info["ssl_error"] = True
+        info["ssl_error_detail"] = f"Certificate verification failed: {ce}"
+    except ssl.SSLError as se:
+        info["ssl_error"] = True
+        info["ssl_error_detail"] = f"TLS error: {se}"
+    except Exception as e:
+        info["ssl_error_detail"] = str(e)
     return info
 
 
