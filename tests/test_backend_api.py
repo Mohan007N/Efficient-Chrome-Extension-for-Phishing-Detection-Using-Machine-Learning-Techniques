@@ -210,3 +210,33 @@ def test_http_without_dom_scan_endpoints_auth_chunked_limit_and_feedback_redacti
             json={"url": "https://example.com/", "fetch_live": False, "deep_scan": False},
             headers={"X-API-Key": "test-api-secret"},
         ).status_code == 200
+
+        # Structured XAI prediction_label + SHAP attributions on /analyze-website and /explain
+        monkeypatch.delenv("WEBSHIELD_API_KEY", raising=False)
+        safe_res = client.post("/analyze-website", json={
+            "url": "https://example.com/",
+            "html": "<html><head><title>Example Domain</title></head><body><p>Official example documentation.</p></body></html>",
+            "fetch_live": False,
+            "deep_scan": False,
+        })
+        assert safe_res.status_code == 200
+        sb = safe_res.json()
+        assert sb["prediction_label"] in ("Real (Legitimate)", "Caution (Suspicious)", "Unverified")
+        assert isinstance(sb["shap_attributions"], list) and len(sb["shap_attributions"]) >= 1
+        assert "label" in sb["shap_attributions"][0]
+
+        exp_res = client.post("/explain", json={
+            "url": "https://example.com/",
+            "hostname": "example.com",
+            "is_phishing": False,
+            "risk_level": "LOW",
+            "phishing_probability": 0.04,
+            "heuristic_risk_index": 5,
+            "features": {"IsHTTPS": 1},
+        })
+        assert exp_res.status_code == 200
+        eb = exp_res.json()
+        assert eb["prediction_label"] == "Real (Legitimate)"
+        assert len(eb["summary"]) > 10
+        assert isinstance(eb["key_signals"], list)
+        assert len(eb["recommended_action"]) > 5

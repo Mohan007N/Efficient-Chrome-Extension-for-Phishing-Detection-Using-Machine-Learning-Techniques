@@ -47,6 +47,15 @@ def test_extension_has_no_embedded_api_keys_or_credential_or_trust_bypass():
     assert "cachedModelVersions" in b_txt
     assert "backendUrl: baseUrl" in b_txt
     assert "URL_CHANGED" in b_txt
+    assert "prediction_label" in b_txt and "shap_attributions" in b_txt
+
+    with open(os.path.join(EXT_DIR, "popup.html"), "r", encoding="utf-8") as f:
+        ph_txt = f.read()
+    assert "predictionLabelVal" in ph_txt and "shapDriversList" in ph_txt
+
+    with open(os.path.join(EXT_DIR, "popup.js"), "r", encoding="utf-8") as f:
+        pj_txt = f.read()
+    assert "derivePredictionName" in pj_txt and "renderShapDrivers" in pj_txt
 
 
 def test_extension_utils_behavior_with_node():

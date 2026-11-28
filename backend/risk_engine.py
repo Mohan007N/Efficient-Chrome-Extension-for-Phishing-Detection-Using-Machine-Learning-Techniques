@@ -44,6 +44,25 @@ def _score_to_level(score: float | None, has_evidence: bool = True, high_thresho
     return "LOW"
 
 
+def resolve_prediction_label(overall_risk_level: str, operational_status: str = "") -> str:
+    """Return an unmistakable human-facing prediction name aligned with safety state."""
+    op = (operational_status or "").strip()
+    lv = (overall_risk_level or "UNKNOWN").upper()
+    if op == "LOCAL_NETWORK_UNVERIFIED":
+        return "Local Network (Unverified)"
+    if op == "Blocked":
+        return "Blocked (Firewall / DNS)"
+    if op == "Unreachable":
+        return "Unreachable Host"
+    if lv == "LOW":
+        return "Real (Legitimate)"
+    if lv == "MEDIUM":
+        return "Caution (Suspicious)"
+    if lv in ("HIGH", "CRITICAL"):
+        return "Fake / Phishing"
+    return "Unverified"
+
+
 class HybridRiskEngine:
     """Fuses ML model probabilities, calibrated thresholds, rule detectors, TLS/reachability, and threat intel."""
 
@@ -110,6 +129,7 @@ class HybridRiskEngine:
         if is_local:
             return {
                 "overall_risk_level": "UNKNOWN",
+                "prediction_label": resolve_prediction_label("UNKNOWN", "LOCAL_NETWORK_UNVERIFIED"),
                 "phishing_probability": None,
                 "heuristic_risk_index": None,
                 "confidence": 0.2,
@@ -426,6 +446,7 @@ class HybridRiskEngine:
 
         return {
             "overall_risk_level": overall,
+            "prediction_label": resolve_prediction_label(overall, operational_status),
             "phishing_probability": ml_phishing_prob,
             "heuristic_risk_index": heuristic_index,
             "confidence": conf,

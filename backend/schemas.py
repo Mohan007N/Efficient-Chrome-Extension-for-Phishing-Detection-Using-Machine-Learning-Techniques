@@ -134,6 +134,7 @@ class PredictionResponse(BaseModel):
     legitimate_probability: Optional[float] = None
     heuristic_risk_index: Optional[int] = None
     overall_risk_level: str = "UNKNOWN"
+    prediction_label: str = "Unverified"
     confidence: float = 0.5
     operational_status: str = "Unknown"
     connection_security: str = "UNKNOWN"
@@ -144,6 +145,7 @@ class PredictionResponse(BaseModel):
     top_indicators: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     reasoning: list[str] = Field(default_factory=list)
+    shap_attributions: list[dict[str, Any]] = Field(default_factory=list)
     assessment: Optional[dict[str, Any]] = None
 
 
@@ -172,6 +174,7 @@ class WebsiteAssessmentResponse(BaseModel):
     url: str
     hostname: str
     overall_risk_level: str
+    prediction_label: str = "Unverified"
     phishing_probability: Optional[float] = None
     heuristic_risk_index: Optional[int] = None
     confidence: float = 0.5
@@ -191,6 +194,7 @@ class WebsiteAssessmentResponse(BaseModel):
     unavailable_signals: list[str] = Field(default_factory=list)
     recommended_action: str = ""
     assessment_confidence_note: str = ""
+    shap_attributions: list[dict[str, Any]] = Field(default_factory=list)
     tranco_rank: Optional[int] = None
     domain_age_days: Optional[int] = None
     registry_match: dict[str, Any] = Field(default_factory=dict)
@@ -210,6 +214,10 @@ class ExplainRequest(BaseModel):
 
 class ExplainResponse(BaseModel):
     explanation: str
+    prediction_label: str = "Unverified"
+    summary: str = ""
+    key_signals: list[str] = Field(default_factory=list)
+    recommended_action: str = ""
     top_indicators: list[str] = Field(default_factory=list)
     feature_attributions: list[dict[str, Any]] = Field(default_factory=list)
     source: str

@@ -41,6 +41,8 @@ const store = {
 };
 
 let currentData = null;
+let activeTabId = null;
+let activePollToken = 0;
 
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
@@ -159,6 +161,56 @@ function riskColorVar(level) {
   return map[(level || "").toUpperCase()] || "var(--unknown)";
 }
 
+function derivePredictionName(level, opStatus, explicitLabel = "") {
+  if (explicitLabel) return explicitLabel;
+  if (opStatus === "LOCAL_NETWORK_UNVERIFIED") return "Local Network (Unverified)";
+  if (opStatus === "Blocked") return "Blocked (Firewall / DNS)";
+  if (opStatus === "Unreachable") return "Unreachable Host";
+  if (level === "LOW") return "Real (Legitimate)";
+  if (level === "MEDIUM") return "Caution (Suspicious)";
+  if (level === "HIGH" || level === "CRITICAL") return "Fake / Phishing";
+  return "Unverified";
+}
+
+function renderShapDrivers(attributions) {
+  const container = $("shapDriversList");
+  if (!container) return;
+  if (!Array.isArray(attributions) || attributions.length === 0) {
+    container.innerHTML = `<div class="xai-empty">No ML feature attributions available for this target.</div>`;
+    return;
+  }
+  const maxAbs = Math.max(
+    0.05,
+    ...attributions.map((a) => Math.abs(Number(a.risk_contribution || 0)))
+  );
+  container.innerHTML = attributions.slice(0, 5).map((a) => {
+    const label = U.escapeHtml(a.label || String(a.feature || "Signal").replace(/_/g, " "));
+    const valTxt = U.escapeHtml(Number.isFinite(Number(a.value)) ? Number(a.value) : (a.value ?? "—"));
+    const layer = a.model_layer ? `<span class="shap-meta">(${U.escapeHtml(a.model_layer)} • val ${valTxt})</span>` : `<span class="shap-meta">(val ${valTxt})</span>`;
+    const contrib = Number(a.risk_contribution || 0);
+    const dir = String(a.direction || "");
+    let cls = "neutral";
+    let tag = `Weight ${contrib.toFixed(3)}`;
+    if (dir === "increases_risk" || (dir !== "reduces_risk" && dir !== "model_importance" && contrib > 0)) {
+      cls = "risk";
+      tag = `+${Math.abs(contrib).toFixed(3)} Risk`;
+    } else if (dir === "reduces_risk" || contrib < 0) {
+      cls = "safe";
+      tag = `-${Math.abs(contrib).toFixed(3)} Safe`;
+    }
+    const pct = Math.max(8, Math.min(100, Math.round((Math.abs(contrib) / maxAbs) * 100)));
+    return `
+      <div class="shap-row">
+        <div class="shap-row-top">
+          <div class="shap-feat">${label}${layer}</div>
+          <span class="shap-delta ${cls}">${U.escapeHtml(tag)}</span>
+        </div>
+        <div class="shap-bar-track"><div class="shap-bar-fill ${cls}" style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderAssessment(data) {
   currentData = data;
   showView("result");
@@ -166,8 +218,10 @@ function renderAssessment(data) {
   const assessment = data.assessment || {};
   const level = String(assessment.overall_risk_level || data.risk_level || "UNKNOWN").toUpperCase();
   const opStatus = assessment.operational_status || data.operational_status || "Unknown";
+  const predLabel = derivePredictionName(level, opStatus, assessment.prediction_label || data.prediction_label || "");
   const idx = assessment.heuristic_risk_index !== undefined ? assessment.heuristic_risk_index : data.heuristic_risk_index;
   const mlProb = assessment.phishing_probability !== undefined ? assessment.phishing_probability : data.phishing_probability;
+  const conf = assessment.confidence !== undefined ? assessment.confidence : data.confidence;
 
   let host = "—";
   try { host = new URL(data.url).hostname; } catch { host = data.url || "—"; }
@@ -176,8 +230,18 @@ function renderAssessment(data) {
   $("siteUrl").textContent = data.url || "—";
   $("lastScanTime").textContent = data.timestamp ? `Last scan: ${new Date(data.timestamp).toLocaleTimeString()}` : "Last scan: —";
 
+  const predCard = $("predictionCard");
+  if (predCard) {
+    predCard.className = `prediction-card tone-${level}`;
+  }
+  const predEl = $("predictionLabelVal");
+  if (predEl) {
+    predEl.textContent = predLabel;
+    predEl.style.color = riskColorVar(level);
+  }
+
   const badge = $("overallRiskBadge");
-  badge.textContent = level;
+  badge.textContent = `${level} RISK`;
   badge.className = `risk-badge risk-${level}`;
 
   if (idx !== null && idx !== undefined) {
@@ -191,10 +255,16 @@ function renderAssessment(data) {
   $("riskMeterFill").style.background = riskColorVar(level);
 
   $("operationalStatusLabel").textContent = `Status: ${opStatus}`;
-  $("mlPhishProbVal").textContent = mlProb != null ? `${(Number(mlProb) * 100).toFixed(1)}%` : "Unavailable";
+  $("mlPhishProbVal").textContent = mlProb != null ? `${(Number(mlProb) * 100).toFixed(1)}%` : "N/A";
   $("urlModelScore").textContent = assessment.url_model_threat_probability != null ? `${(assessment.url_model_threat_probability * 100).toFixed(1)}%` : "N/A";
   $("domModelScore").textContent = assessment.dom_model_threat_probability != null ? `${(assessment.dom_model_threat_probability * 100).toFixed(1)}%` : "N/A";
+  if ($("confidenceVal")) {
+    $("confidenceVal").textContent = conf != null ? `${Math.round(Number(conf) * 100)}%` : "N/A";
+  }
   $("recommendedAction").textContent = assessment.recommended_action || data.verdict || "";
+
+  const shapAttrs = assessment.shap_attributions || data.shap_attributions || [];
+  renderShapDrivers(shapAttrs);
 
   const dims = assessment.dimensions || {};
   const dimMeta = [
@@ -250,6 +320,7 @@ function renderAssessment(data) {
   `).join("");
 
   $("xaiOutput").style.display = "none";
+  $("xaiOutput").innerHTML = "";
   $("feedbackStatus").style.display = "none";
 }
 
@@ -263,8 +334,8 @@ $("toggleEvidenceBtn")?.addEventListener("click", () => {
 $("explainBtn")?.addEventListener("click", () => {
   if (!currentData || !hasChromeRuntime) return;
   const out = $("xaiOutput");
-  out.style.display = "block";
-  out.textContent = "Generating explanation…";
+  out.style.display = "flex";
+  out.innerHTML = `<div class="xai-empty">Generating structured AI explanation…</div>`;
   let host = "";
   try { host = new URL(currentData.url).hostname; } catch {}
   chrome.runtime.sendMessage({
@@ -278,7 +349,34 @@ $("explainBtn")?.addEventListener("click", () => {
     features: currentData.features || {},
     assessment: currentData.assessment || null,
   }, (res) => {
-    out.textContent = res?.explanation || res?.error || "Explanation unavailable.";
+    if (chrome.runtime.lastError || !res || (res.error && !res.explanation)) {
+      out.innerHTML = `<div class="xai-empty">${U.escapeHtml(chrome.runtime.lastError?.message || res?.error || "Explanation unavailable.")}</div>`;
+      return;
+    }
+    if (Array.isArray(res.feature_attributions) && res.feature_attributions.length) {
+      renderShapDrivers(res.feature_attributions);
+    }
+    const sourceBadge = res.source === "groq" ? "Groq AI + SHAP" : "SHAP + Rule XAI";
+    const summaryText = res.summary || res.explanation || "Explanation generated.";
+    const signals = Array.isArray(res.key_signals) && res.key_signals.length
+      ? res.key_signals
+      : (res.top_indicators || []);
+    const actionText = res.recommended_action || "";
+    const sigHtml = signals.length
+      ? `<ul class="xai-signals">${signals.slice(0, 5).map((s) => `<li>${U.escapeHtml(s)}</li>`).join("")}</ul>`
+      : "";
+    const actHtml = actionText
+      ? `<div class="xai-action-box">${U.escapeHtml(actionText)}</div>`
+      : "";
+    out.innerHTML = `
+      <div class="xai-source-row">
+        <span class="xai-source-badge">${U.escapeHtml(sourceBadge)}</span>
+        <span class="section-sub">${U.escapeHtml(res.prediction_label || "")}</span>
+      </div>
+      <p class="xai-summary">${U.escapeHtml(summaryText)}</p>
+      ${sigHtml}
+      ${actHtml}
+    `;
   });
 });
 
@@ -313,13 +411,14 @@ async function renderHistory() {
   $("historyList").innerHTML = list.map(item => {
     const safeHost = U.escapeHtml(item.hostname || item.url);
     const safeLv = U.escapeHtml(item.risk_level || "UNKNOWN");
-    const safeOp = U.escapeHtml(item.operational_status || "");
+    const predText = derivePredictionName(item.risk_level, item.operational_status, item.prediction_label || "");
+    const safePred = U.escapeHtml(predText);
     const safeTime = U.escapeHtml(new Date(item.timestamp).toLocaleString());
     return `
       <div class="hist-item">
         <div style="min-width:0">
           <div class="hist-host">${safeHost}</div>
-          <div class="hist-time">${safeTime}${safeOp ? ` • ${safeOp}` : ""}</div>
+          <div class="hist-time">${safeTime} • ${safePred}</div>
         </div>
         <span class="risk-badge risk-${safeLv}">${safeLv}</span>
       </div>
@@ -339,10 +438,18 @@ async function triggerRescan() {
     showView("idle");
     return;
   }
-  await store.remove(`tab_${tab.id}`);
-  chrome.runtime.sendMessage({ type: "RESCAN_TAB", tabId: tab.id });
+  activeTabId = tab.id;
+  currentData = null;
+  const key = `tab_${tab.id}`;
+  await store.set({ [key]: { status: "loading", url: tab.url, timestamp: Date.now() } });
+  chrome.runtime.sendMessage({ type: "RESCAN_TAB", tabId: tab.id }, (resp) => {
+    if (chrome.runtime.lastError) {
+      $("errorMsg").textContent = chrome.runtime.lastError.message || "Could not contact tab scanner.";
+      showView("error");
+    }
+  });
   showView("loading");
-  pollTab(`tab_${tab.id}`);
+  pollTab(key, 0, ++activePollToken);
 }
 
 $("rescanBtn")?.addEventListener("click", triggerRescan);
@@ -350,23 +457,44 @@ $("reverifyBtn")?.addEventListener("click", triggerRescan);
 $("idleScanBtn")?.addEventListener("click", triggerRescan);
 $("retryErrorBtn")?.addEventListener("click", triggerRescan);
 
-function pollTab(key, attempt = 0) {
-  if (attempt > 24) {
+function pollTab(key, attempt = 0, token = activePollToken) {
+  if (token !== activePollToken) return;
+  if (attempt > 34) {
     $("errorMsg").textContent = "Scan timed out. Check backend connection (OFFLINE).";
     showView("error");
     return;
   }
   setTimeout(async () => {
+    if (token !== activePollToken) return;
     const res = await store.get(key);
     const data = res[key];
-    if (!data || data.status === "loading") { pollTab(key, attempt + 1); return; }
+    if (!data || data.status === "loading") { pollTab(key, attempt + 1, token); return; }
     if (data.status === "error" || data.status === "offline") {
       $("errorMsg").textContent = data.error || "Backend offline or unreachable.";
       showView("error");
       return;
     }
     if (data.status === "done") renderAssessment(data);
-  }, 500);
+  }, 450);
+}
+
+if (hasChromeStorage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !activeTabId) return;
+    const ch = changes[`tab_${activeTabId}`];
+    if (!ch || !ch.newValue) return;
+    const nextData = ch.newValue;
+    if (nextData.status === "done") {
+      activePollToken++;
+      renderAssessment(nextData);
+    } else if (nextData.status === "error" || nextData.status === "offline") {
+      activePollToken++;
+      $("errorMsg").textContent = nextData.error || "Backend offline or unreachable.";
+      showView("error");
+    } else if (nextData.status === "loading" && (!currentData || currentData.url !== nextData.url)) {
+      showView("loading");
+    }
+  });
 }
 
 async function bootstrap() {
@@ -382,13 +510,22 @@ async function bootstrap() {
     showView("idle");
     return;
   }
+  activeTabId = tab.id;
   const key = `tab_${tab.id}`;
   const res = await store.get(key);
   const data = res[key];
-  if (!data) showView("idle");
-  else if (data.status === "loading") { showView("loading"); pollTab(key); }
-  else if (data.status === "error" || data.status === "offline") { $("errorMsg").textContent = data.error || "Backend offline or unreachable."; showView("error"); }
-  else if (data.status === "done") renderAssessment(data);
+  if (!data || (data.url && data.url !== tab.url)) {
+    // Missing or stale result (e.g., extension reloaded on open tab or SPA navigation just happened): auto-scan immediately
+    await triggerRescan();
+  } else if (data.status === "loading") {
+    showView("loading");
+    pollTab(key, 0, ++activePollToken);
+  } else if (data.status === "error" || data.status === "offline") {
+    $("errorMsg").textContent = data.error || "Backend offline or unreachable.";
+    showView("error");
+  } else if (data.status === "done") {
+    renderAssessment(data);
+  }
 }
 
 bootstrap();

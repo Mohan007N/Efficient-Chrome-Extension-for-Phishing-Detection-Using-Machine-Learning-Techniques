@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+from typing import Any
 import urllib.error
 import urllib.request
 
@@ -28,6 +29,84 @@ logger = logging.getLogger("PhishingAPI.Explainer")
 
 DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 SUSPICIOUS_TLDS = SUSPICIOUS_COMMERCE_TLDS
+
+_TREE_EXPLAINER_CACHE: dict[int, Any] = {}
+
+FEATURE_LABELS: dict[str, str] = {
+    "url_length": "URL Length",
+    "domain_length": "Domain Length",
+    "path_length": "Path Length",
+    "query_length": "Query Length",
+    "num_subdomains": "Subdomain Count",
+    "num_dots": "Dot Count",
+    "num_hyphens_domain": "Domain Hyphens",
+    "num_digits_url": "Digits in URL",
+    "num_digits_domain": "Digits in Domain",
+    "num_special_chars": "Special Characters",
+    "special_char_ratio": "Special Char Ratio",
+    "is_ip_address": "Raw IP Host",
+    "is_punycode_or_idn": "Punycode / IDN",
+    "has_unicode_homoglyph": "Homoglyph Characters",
+    "has_unusual_port": "Non-Standard Port",
+    "has_userinfo_in_url": "URL Userinfo (@)",
+    "has_redirect_indicator": "Redirect Query Param",
+    "is_url_shortener": "URL Shortener",
+    "has_url_obfuscation": "Percent Obfuscation",
+    "path_depth": "URL Path Depth",
+    "num_query_params": "Query Parameter Count",
+    "url_entropy": "URL Character Entropy",
+    "domain_entropy": "Domain Entropy",
+    "tld_length": "TLD Length",
+    "is_suspicious_tld": "High-Risk Store TLD",
+    "suspicious_keyword_count": "Scam / Phishing Keywords",
+    "is_https": "HTTPS Transport",
+    "brand_similarity_score": "Brand Spoof Similarity",
+    "typosquat_edit_distance": "Brand Edit Distance",
+    "char_continuation_rate": "Char Continuation Rate",
+    "letter_ratio": "Letter Ratio",
+    "digit_ratio": "Digit Ratio",
+    "tld": "Top-Level Domain",
+    "num_password_fields": "Password Fields",
+    "num_username_email_inputs": "Login ID Inputs",
+    "num_login_forms": "Login Forms",
+    "has_external_form_action": "External Form Submit",
+    "num_cross_domain_forms": "Cross-Domain Forms",
+    "num_hidden_credential_inputs": "Hidden Form Inputs",
+    "suspicious_login_indicators": "Suspicious Login Cues",
+    "brand_domain_mismatch": "Brand-Domain Mismatch",
+    "total_forms": "Total Forms",
+    "external_forms_count": "External Forms",
+    "has_post_form": "POST Form Present",
+    "num_sensitive_inputs": "Sensitive Field Count",
+    "num_payment_inputs": "Payment Inputs",
+    "has_suspicious_payment_dest": "External Payment Dest",
+    "has_prepaid_without_cod": "Prepaid-Only Store",
+    "has_restrictive_refund_terms": "Restrictive Refund Text",
+    "num_iframes": "Embedded iFrames",
+    "num_hidden_iframes": "Hidden iFrames",
+    "num_external_scripts": "External Scripts",
+    "popup_trigger_count": "Popup Triggers",
+    "fake_download_button_count": "Fake Download CTAs",
+    "suspicious_link_ratio": "Empty/JS Link Ratio",
+    "meta_refresh_redirects": "Meta Redirects",
+    "js_redirect_indicators": "JS Redirects",
+    "misleading_button_count": "Urgency / Bait CTAs",
+    "external_link_ratio": "External Link Ratio",
+    "notification_prompt_requested": "Notification Prompt",
+    "inline_script_count": "Inline Scripts",
+    "suspicious_inline_js_count": "Suspicious Inline JS",
+    "obfuscated_js_score": "Obfuscated JS Score",
+    "dynamic_dom_mutation_count": "Dynamic DOM Injection",
+    "html_line_count": "HTML Line Count",
+    "has_title": "Page Title Present",
+    "domain_title_match_score": "Domain-Title Match",
+    "has_copyright_notice": "Copyright Notice",
+    "has_official_contact_cue": "Official Contact Email",
+}
+
+
+def get_feature_label(feature_name: str) -> str:
+    return FEATURE_LABELS.get(feature_name, feature_name.replace("_", " ").title())
 
 try:
     import shap
@@ -51,7 +130,7 @@ def _unwrap_calibrated_or_pipeline_estimator(model):
     return inner
 
 
-def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
+def compute_shap_attributions(model, X_row, top_k: int = 5, model_layer: str = "ML Model") -> list[dict]:
     """
     Compute top SHAP feature contributions toward threat risk (`0 = Phishing/Malicious`) for a single row.
     Unwraps `CalibratedClassifierCV` cleanly and respects `model.classes_` sign conventions.
@@ -69,7 +148,12 @@ def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
 
     if SHAP_AVAILABLE:
         try:
-            explainer = shap.TreeExplainer(base_model)
+            cache_key = id(base_model)
+            explainer = _TREE_EXPLAINER_CACHE.get(cache_key)
+            if explainer is None:
+                explainer = shap.TreeExplainer(base_model)
+                if len(_TREE_EXPLAINER_CACHE) < 16:
+                    _TREE_EXPLAINER_CACHE[cache_key] = explainer
             sv = explainer.shap_values(X_row)
             if isinstance(sv, list):
                 vals = sv[phish_idx][0]
@@ -85,7 +169,9 @@ def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
                 contrib = float(vals[idx])
                 pairs.append({
                     "feature": col,
-                    "value": float(X_row.iloc[0, idx]),
+                    "label": get_feature_label(col),
+                    "model_layer": model_layer,
+                    "value": round(float(X_row.iloc[0, idx]), 4),
                     "risk_contribution": round(contrib, 4),
                     "direction": "increases_risk" if contrib > 0 else "reduces_risk",
                 })
@@ -104,7 +190,9 @@ def compute_shap_attributions(model, X_row, top_k: int = 5) -> list[dict]:
         return [
             {
                 "feature": col,
-                "value": float(val),
+                "label": get_feature_label(col),
+                "model_layer": model_layer,
+                "value": round(float(val), 4),
                 "risk_contribution": round(float(imp), 4),
                 "direction": "model_importance",
             }
@@ -252,10 +340,21 @@ def generate_explanation(
     attributions: list[dict] | None = None,
     heuristic_risk_index: int | None = None,
 ) -> dict:
-    """Generate human-readable multi-layer explanation with SHAP/feature attributions and Groq fallback."""
+    """Generate structured Explainable AI summary, SHAP feature attributions, and optional Groq briefing."""
+    from backend.risk_engine import resolve_prediction_label
+
     backend_inds = (assessment or {}).get("evidence") or (features_dict.get("_backend_indicators") if isinstance(features_dict, dict) else None)
     indicators = extract_top_indicators(features_dict, is_phishing, risk_level, backend_indicators=backend_inds)
-    attr_list = attributions or []
+    attr_list = attributions or (assessment or {}).get("shap_attributions") or []
+
+    op_status = (assessment or {}).get("operational_status", "")
+    pred_label = (assessment or {}).get("prediction_label") or resolve_prediction_label(risk_level, op_status)
+    h_idx = heuristic_risk_index if heuristic_risk_index is not None else (assessment or {}).get("heuristic_risk_index")
+    action = (assessment or {}).get("recommended_action") or (
+        "Avoid entering credentials, payment details, or downloading files until verified."
+        if risk_level in ("MEDIUM", "HIGH", "CRITICAL", "UNKNOWN")
+        else "Safe to browse normally; standard HTTPS and clean DOM/URL signals observed."
+    )
 
     key = (api_key or os.getenv("GROQ_API_KEY") or DEFAULT_GROQ_KEY or "").strip()
     if key:
@@ -273,6 +372,10 @@ def generate_explanation(
             ai_text = call_groq_ai(prompt, key)
             return {
                 "explanation": ai_text,
+                "prediction_label": pred_label,
+                "summary": ai_text.splitlines()[0].strip("*# ") if ai_text else "",
+                "key_signals": indicators[:5],
+                "recommended_action": action,
                 "top_indicators": indicators,
                 "feature_attributions": attr_list,
                 "source": "groq",
@@ -283,33 +386,45 @@ def generate_explanation(
     else:
         err_msg = None
 
-    action = (assessment or {}).get("recommended_action") or (
-        "Avoid entering credentials, payment details, or downloading files until verified."
-        if risk_level in ("MEDIUM", "HIGH", "CRITICAL", "UNKNOWN")
-        else "No suspicious indicators observed across checked dimensions."
-    )
+    prob_pct = f"{phishing_prob * 100:.1f}%" if phishing_prob is not None else "Unavailable"
+    heur_txt = f"{h_idx}/100" if h_idx is not None else "N/A"
+    target_name = hostname or url or "target website"
+    if risk_level == "LOW":
+        summary = (
+            f"Prediction: {pred_label}. {target_name} shows legitimate URL/DOM structure "
+            f"with low ML phishing probability ({prob_pct}) and heuristic risk ({heur_txt})."
+        )
+    elif risk_level in ("HIGH", "CRITICAL"):
+        summary = (
+            f"Prediction: {pred_label}. High-risk phishing, impersonation, credential, or threat-feed signals "
+            f"were detected on {target_name} (ML probability {prob_pct}, risk index {heur_txt})."
+        )
+    elif risk_level == "MEDIUM":
+        summary = (
+            f"Prediction: {pred_label}. Elevated caution signals (such as unencrypted HTTP or minor anomalies) "
+            f"were observed on {target_name} (risk index {heur_txt})."
+        )
+    else:
+        summary = (
+            f"Prediction: {pred_label}. Available observations are insufficient to confirm safety on {target_name}."
+        )
+
     bullets = "\n".join(f"- {ind}" for ind in indicators) if indicators else "- Standard baseline heuristics inspected."
     attr_bullets = ""
     if attr_list:
-        attr_bullets = "\n\n**Top Model Feature Attributions:**\n" + "\n".join(
-            f"- `{a['feature']}` = `{a['value']}` ({a['direction']}: `{a['risk_contribution']}`)"
-            for a in attr_list[:4]
+        attr_bullets = "\n\nTop SHAP Feature Drivers:\n" + "\n".join(
+            f"- {a.get('label', a['feature'])} = {a['value']} ({'raises risk' if a.get('direction') == 'increases_risk' else 'reduces risk'}: {a['risk_contribution']:+.3f})"
+            for a in attr_list[:5]
         )
 
-    h_idx = heuristic_risk_index if heuristic_risk_index is not None else (assessment or {}).get("heuristic_risk_index")
-    prob_line = f"**Calibrated ML Phishing Probability:** **{phishing_prob * 100:.1f}%**" if phishing_prob is not None else "**Calibrated ML Phishing Probability:** Unavailable"
-    heur_line = f"**Heuristic Risk Index:** **{h_idx}/100**" if h_idx is not None else "**Heuristic Risk Index:** Not computed"
-
-    rule_text = (
-        f"### Website Safety Assessment ({risk_level} Risk)\n\n"
-        f"**Target:** `{hostname or url}`  \n"
-        f"{prob_line} | {heur_line} *(heuristics measure observed risk signals separately from ML probabilities)*\n\n"
-        f"**Observed Evidence:**\n{bullets}{attr_bullets}\n\n"
-        f"**Recommended Action:** {action}"
-    )
+    rule_text = f"{summary}\n\nObserved Evidence:\n{bullets}{attr_bullets}\n\nRecommended Action: {action}"
 
     return {
         "explanation": rule_text,
+        "prediction_label": pred_label,
+        "summary": summary,
+        "key_signals": indicators[:6],
+        "recommended_action": action,
         "top_indicators": indicators,
         "feature_attributions": attr_list,
         "source": "rule_based_fallback" if err_msg else "rule_based",

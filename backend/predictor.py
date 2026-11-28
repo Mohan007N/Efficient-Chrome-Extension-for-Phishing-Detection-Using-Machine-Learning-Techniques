@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 import joblib
 import pandas as pd
 
+from backend.explainer import compute_shap_attributions
 from backend.intel import UnauthorizedIntelEngine
 from backend.risk_engine import HybridRiskEngine
 from backend.security import is_private_or_local_target, sanitize_telemetry_dict
@@ -311,27 +312,43 @@ class PhishingPredictor:
         )
 
         overall = assessment["overall_risk_level"]
+        pred_label = assessment.get("prediction_label", "Unverified")
         if assessment.get("operational_status") == "LOCAL_NETWORK_UNVERIFIED":
             verdict = f"LOCAL NETWORK UNVERIFIED — External safety scan skipped ({root or host})"
         elif overall == "CRITICAL":
-            verdict = f"CRITICAL RISK — Threat or strong malicious indicators detected ({root or host})"
+            verdict = f"FAKE / PHISHING THREAT — Critical malicious indicators detected ({root or host})"
         elif overall == "HIGH":
-            verdict = f"HIGH RISK — Multiple suspicious safety indicators ({root or host})"
+            verdict = f"FAKE / PHISHING RISK — Multiple suspicious safety indicators ({root or host})"
         elif overall == "MEDIUM":
-            verdict = f"CAUTION (MEDIUM RISK) — Verify transport/authenticity ({root or host})"
+            verdict = f"CAUTION (SUSPICIOUS / UNENCRYPTED) — Verify transport & authenticity ({root or host})"
         elif overall == "UNKNOWN":
-            verdict = f"UNKNOWN — Insufficient evidence to verify ({root or host})"
+            verdict = f"UNVERIFIED — Insufficient evidence to confirm ({root or host})"
         else:
-            verdict = f"LOW RISK — No suspicious indicators observed ({root or host})"
+            verdict = f"REAL WEBSITE — Legitimate URL, DOM & reputation verified ({root or host})"
+
+        shap_attributions: list[dict] = []
+        if not is_local:
+            if url_df is not None and self._url_model is not None:
+                shap_attributions.extend(
+                    compute_shap_attributions(self._url_model, url_df, top_k=4, model_layer="URL ML")
+                )
+            if dom_df is not None and self._dom_model is not None:
+                shap_attributions.extend(
+                    compute_shap_attributions(self._dom_model, dom_df, top_k=4, model_layer="DOM ML")
+                )
+            shap_attributions.sort(key=lambda a: abs(float(a.get("risk_contribution", 0.0))), reverse=True)
+            shap_attributions = shap_attributions[:6]
 
         assessment.update({
             "url": url,
             "hostname": host,
+            "prediction_label": pred_label,
             "verdict": verdict,
             "whitelisted": is_whitelisted,
             "tranco_rank": intel_res.get("tranco_rank"),
             "domain_age_days": (intel_res.get("rdap") or {}).get("domain_age_days"),
             "registry_match": intel_res.get("registry_match") or {},
+            "shap_attributions": shap_attributions,
             "_url_df": url_df,
             "_dom_df": dom_df,
         })
@@ -372,6 +389,7 @@ class PhishingPredictor:
             "legitimate_probability": legit_prob,
             "heuristic_risk_index": assessment_public.get("heuristic_risk_index"),
             "overall_risk_level": overall,
+            "prediction_label": assessment_public.get("prediction_label", "Unverified"),
             "confidence": assessment_public.get("confidence", 0.5),
             "operational_status": assessment_public.get("operational_status", "Unknown"),
             "connection_security": assessment_public.get("connection_security", "UNKNOWN"),
@@ -382,5 +400,6 @@ class PhishingPredictor:
             "top_indicators": assessment_public["evidence"][:8],
             "evidence": assessment_public["evidence"],
             "reasoning": assessment_public.get("reasoning", []),
+            "shap_attributions": assessment_public.get("shap_attributions", []),
             "assessment": assessment_public,
         }

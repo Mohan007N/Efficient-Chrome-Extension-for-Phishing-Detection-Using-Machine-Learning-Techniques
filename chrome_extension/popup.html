@@ -35,7 +35,7 @@
         <button class="btn-close-sm" id="settingsCloseBtn" aria-label="Close">✕</button>
       </div>
       <p class="settings-desc">
-        Configure your FastAPI assessment backend URL (local or HTTPS production). Zero passwords, cookies, or secrets are collected or transmitted.
+        Configure your FastAPI assessment backend URL. Zero passwords, cookies, or secrets are collected or transmitted.
       </p>
       <label class="field-label" for="apiBaseInput">Backend API URL</label>
       <div class="key-field-wrap">
@@ -64,8 +64,8 @@
 
     <!-- Navigation Tabs -->
     <nav class="nav-tabs" id="navTabs">
-      <button class="nav-tab active" id="tabOverviewBtn" data-tab="overview">Dashboard</button>
-      <button class="nav-tab" id="tabSignalsBtn" data-tab="signals">DOM &amp; Signals</button>
+      <button class="nav-tab active" id="tabOverviewBtn" data-tab="overview">Assessment</button>
+      <button class="nav-tab" id="tabSignalsBtn" data-tab="signals">DOM Signals</button>
       <button class="nav-tab" id="tabHistoryBtn" data-tab="history">History</button>
     </nav>
 
@@ -76,7 +76,7 @@
         <div class="state-box" id="viewLoading" style="display:none">
           <div class="spinner"></div>
           <p class="view-title">Assessing Website Safety…</p>
-          <p class="view-sub">Evaluating calibrated URL/DOM ML models, credentials, payments, TLS, and threat feeds.</p>
+          <p class="view-sub">Evaluating calibrated URL/DOM ML models, SHAP attributions, credentials, payments &amp; threat intel.</p>
         </div>
 
         <div class="state-box" id="viewIdle">
@@ -92,64 +92,92 @@
         </div>
 
         <div id="viewResult" style="display:none">
-          <!-- Website Header Card -->
-          <div class="site-card">
-            <div class="site-meta">
-              <div class="site-domain" id="siteDomain">—</div>
-              <div class="site-url" id="siteUrl">—</div>
+          <!-- 1. Website Prediction Header Card -->
+          <section class="prediction-card" id="predictionCard">
+            <div class="pred-top">
+              <div class="site-meta">
+                <div class="site-domain" id="siteDomain">—</div>
+                <div class="site-url" id="siteUrl">—</div>
+              </div>
+              <span class="risk-badge" id="overallRiskBadge">UNKNOWN</span>
             </div>
-            <span class="risk-badge" id="overallRiskBadge">UNKNOWN</span>
-          </div>
-
-          <!-- Separated ML Probability & Heuristic Risk Index -->
-          <div class="hero-card" id="heroCard">
-            <div class="hero-top">
+            <div class="pred-verdict-row">
               <div>
-                <div class="hero-label">Heuristic Risk Index</div>
-                <div class="hero-score" id="heuristicScoreVal">—</div>
-                <div class="brand-sub" id="operationalStatusLabel">Status: Unknown</div>
+                <div class="pred-kicker">Prediction</div>
+                <div class="pred-title" id="predictionLabelVal">—</div>
               </div>
-              <div class="ml-scores">
-                <div>ML Phish Prob: <strong id="mlPhishProbVal">N/A</strong></div>
-                <div>URL ML: <strong id="urlModelScore">N/A</strong></div>
-                <div>DOM ML: <strong id="domModelScore">N/A</strong></div>
-              </div>
+              <span class="status-pill" id="operationalStatusLabel">Status: —</span>
+            </div>
+            <p class="recommended-action" id="recommendedAction">—</p>
+          </section>
+
+          <!-- 2. Separated Risk & ML Probabilities -->
+          <section class="card scores-card">
+            <div class="scores-head">
+              <span class="section-label">Risk Index &amp; Calibrated ML</span>
+              <span class="hero-score" id="heuristicScoreVal">—</span>
             </div>
             <div class="risk-meter-track">
               <div class="risk-meter-fill" id="riskMeterFill" style="width:0%"></div>
             </div>
-            <p class="recommended-action" id="recommendedAction">—</p>
-          </div>
+            <div class="metrics-grid">
+              <div class="metric-tile">
+                <span class="metric-label">ML Phish Prob</span>
+                <strong class="metric-val" id="mlPhishProbVal">N/A</strong>
+              </div>
+              <div class="metric-tile">
+                <span class="metric-label">URL ML</span>
+                <strong class="metric-val" id="urlModelScore">N/A</strong>
+              </div>
+              <div class="metric-tile">
+                <span class="metric-label">DOM ML</span>
+                <strong class="metric-val" id="domModelScore">N/A</strong>
+              </div>
+              <div class="metric-tile">
+                <span class="metric-label">Confidence</span>
+                <strong class="metric-val" id="confidenceVal">N/A</strong>
+              </div>
+            </div>
+          </section>
 
-          <!-- 6 Separated Risk Dimensions -->
-          <div class="dimensions-grid" id="dimensionsGrid"></div>
+          <!-- 3. Explainable AI (SHAP Drivers + Structured Briefing) -->
+          <section class="card xai-card">
+            <div class="xai-header">
+              <div>
+                <div class="section-title">Explainable AI (SHAP Drivers)</div>
+                <div class="section-sub">Top features influencing the ML verdict</div>
+              </div>
+              <button class="btn-small" id="explainBtn">AI Briefing</button>
+            </div>
+            <div class="shap-list" id="shapDriversList">
+              <div class="xai-empty">Waiting for model attribution data…</div>
+            </div>
+            <div class="xai-briefing" id="xaiOutput" style="display:none"></div>
+          </section>
 
-          <!-- Expandable Evidence & Explanation -->
-          <div class="card">
+          <!-- 4. 6 Separated Security Dimensions -->
+          <section class="section-block">
+            <div class="block-header">Security Dimensions</div>
+            <div class="dimensions-grid" id="dimensionsGrid"></div>
+          </section>
+
+          <!-- 5. Evidence & Unavailable Signals -->
+          <section class="card">
             <button class="accordion-toggle" id="toggleEvidenceBtn" aria-expanded="true">
-              <span>Detailed Evidence &amp; Signals</span>
+              <span>Observed Evidence &amp; Intel</span>
               <span id="evidenceChevron">▾</span>
             </button>
             <div class="accordion-body" id="evidenceBody">
               <ul class="evidence-list" id="evidenceList"></ul>
               <div class="unavailable-note" id="unavailableNote" style="display:none"></div>
             </div>
-          </div>
+          </section>
 
-          <!-- XAI Explanation Card -->
-          <div class="card">
-            <div class="xai-header">
-              <span>Explainable AI Reasoning</span>
-              <button class="btn-small" id="explainBtn">Explain Verdict</button>
-            </div>
-            <div class="xai-output" id="xaiOutput" style="display:none"></div>
-          </div>
-
-          <!-- User Feedback Controls (Zero permanent alert bypass) -->
+          <!-- 6. Action & Verification Controls -->
           <div class="action-bar">
-            <button class="btn-outline" id="reverifyBtn">Force Rescan</button>
-            <button class="btn-outline" id="reportFpBtn">Report False Positive</button>
-            <button class="btn-outline" id="reportMissedBtn">Report Threat</button>
+            <button class="btn-outline" id="reverifyBtn">Rescan</button>
+            <button class="btn-outline" id="reportFpBtn">Report Safe</button>
+            <button class="btn-outline" id="reportMissedBtn">Report Fake</button>
           </div>
           <div class="feedback-note" id="feedbackStatus" style="display:none"></div>
         </div>
@@ -173,7 +201,7 @@
     </main>
 
     <footer class="footer">
-      <span>Privacy-first structural inspection (zero passwords/cookies collected)</span>
+      <span>Privacy-first inspection • Zero passwords or cookies collected</span>
     </footer>
   </div>
 

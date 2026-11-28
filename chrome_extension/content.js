@@ -411,6 +411,8 @@
     const rawEvidence = (assessment.evidence || data.top_indicators || []).slice(0, 4);
     const safeAction = U.escapeHtml(assessment.recommended_action || "Proceed carefully before entering personal or payment details.");
     const safeLevel = U.escapeHtml(riskLevel);
+    const rawPred = assessment.prediction_label || data.prediction_label || (riskLevel === "MEDIUM" ? "Caution (Suspicious)" : "Fake / Phishing");
+    const safePred = U.escapeHtml(rawPred);
     const accent = riskLevel === "CRITICAL" ? "#e11d48" : (riskLevel === "HIGH" ? "#f97316" : "#f59e0b");
 
     const banner = document.createElement("div");
@@ -428,7 +430,7 @@
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;">
         <div style="min-width:0;">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:13px;font-weight:700;color:#ffffff;">WebShield Safety Notice</span>
+            <span style="font-size:13px;font-weight:700;color:#ffffff;">WebShield AI: ${safePred}</span>
             <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${accent}26;color:${accent};border:1px solid ${accent}66;">${safeLevel} RISK</span>
           </div>
           <div style="font-size:11.5px;color:#e2e8f0;margin-top:3px;">${safeAction}</div>
@@ -467,8 +469,8 @@
 
   function runScan(force = false) {
     const currentUrl = window.location.href;
-    if (SERP_PATTERNS.some(p => p.test(currentUrl))) return;
-    if (!isPageMeaningful()) {
+    if (!force && SERP_PATTERNS.some(p => p.test(currentUrl))) return;
+    if (!force && !isPageMeaningful()) {
       setTimeout(() => { if (isPageMeaningful()) dispatchScan(currentUrl, force); }, 1200);
       return;
     }

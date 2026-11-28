@@ -197,7 +197,19 @@ def test_http_url_with_sparse_dom_preserves_insecure_http_and_applies_thresholds
         url_threshold=0.35,
     )
     assert res_default_thr["dimensions"]["phishing_risk"]["level"] == "MEDIUM"
+    assert res_default_thr["prediction_label"] == "Caution (Suspicious)"
     assert res_low_thr["dimensions"]["phishing_risk"]["level"] == "HIGH"
+    assert res_low_thr["prediction_label"] == "Fake / Phishing"
     assert res_low_thr["thresholds"]["url_model"] == 0.35
+
+    res_real = engine.assess(
+        url="https://docs.invalid/",
+        url_threat_prob=0.05,
+        dom_threat_prob=0.05,
+        dom_features={"is_https": 1, "html_line_count": 50, "has_title": 1},
+        has_dom_observation=True,
+    )
+    assert res_real["overall_risk_level"] == "LOW"
+    assert res_real["prediction_label"] == "Real (Legitimate)"
 
 

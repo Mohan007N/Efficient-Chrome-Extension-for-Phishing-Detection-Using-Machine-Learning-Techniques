@@ -89,6 +89,7 @@ async function appendScanHistory(entry) {
   filtered.unshift({
     url: entry.url,
     hostname: extractHostname(entry.url),
+    prediction_label: entry.prediction_label || entry.assessment?.prediction_label || "",
     risk_level: entry.risk_level,
     operational_status: entry.operational_status || entry.assessment?.operational_status || "Unknown",
     heuristic_risk_index: entry.heuristic_risk_index ?? entry.assessment?.heuristic_risk_index ?? null,
@@ -167,7 +168,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, () => {
         if (chrome.runtime.lastError) {
-          chrome.tabs.reload(tabId);
+          // Content script wasn't loaded on already-open tab (e.g. after extension reload): inject directly
+          if (chrome.scripting && chrome.scripting.executeScript) {
+            chrome.scripting.executeScript(
+              { target: { tabId }, files: ["utils.js", "content.js"] },
+              () => {
+                if (chrome.runtime.lastError) {
+                  chrome.tabs.reload(tabId);
+                } else {
+                  chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, () => {
+                    void chrome.runtime.lastError;
+                  });
+                }
+              }
+            );
+          } else {
+            chrome.tabs.reload(tabId);
+          }
         }
       });
       sendResponse({ ok: true });
@@ -192,11 +209,14 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
       operational_status: "LOCAL_NETWORK_UNVERIFIED",
       connection_security: "LOCAL_NETWORK_UNVERIFIED",
       verdict: `LOCAL NETWORK UNVERIFIED (${host})`,
+      prediction_label: "Local Network (Unverified)",
       risk_level: "UNKNOWN",
       whitelisted: false,
       top_indicators: ["Loopback or private network host detected; external reputation and threat scans skipped."],
+      shap_attributions: [],
       assessment: {
         overall_risk_level: "UNKNOWN",
+        prediction_label: "Local Network (Unverified)",
         phishing_probability: null,
         heuristic_risk_index: null,
         operational_status: "LOCAL_NETWORK_UNVERIFIED",
@@ -248,9 +268,14 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
     }
   }
 
-  await chrome.storage.local.set({
-    [`tab_${tabId}`]: { status: "loading", url: pageUrl, timestamp: now },
-  });
+  const tabKey = `tab_${tabId}`;
+  const existingObj = await chrome.storage.local.get(tabKey);
+  const prevTab = existingObj[tabKey];
+  if (force || !prevTab || prevTab.url !== pageUrl || prevTab.status !== "done") {
+    await chrome.storage.local.set({
+      [tabKey]: { status: "loading", url: pageUrl, timestamp: now },
+    });
+  }
 
   try {
     let promise = inFlightScans.get(cacheKey);
@@ -272,9 +297,12 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
       connection_security: result.connection_security || result.assessment?.connection_security || "UNKNOWN",
       model_availability: result.model_availability || result.assessment?.model_availability || {},
       verdict: result.verdict,
+      prediction_label: result.prediction_label || result.assessment?.prediction_label || "",
       risk_level: result.risk_level,
+      confidence: result.confidence ?? result.assessment?.confidence ?? null,
       whitelisted: result.whitelisted || false,
       top_indicators: result.top_indicators || [],
+      shap_attributions: result.shap_attributions || result.assessment?.shap_attributions || [],
       assessment: result.assessment || null,
       features,
     };
@@ -320,7 +348,7 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
 
 async function callPredictAPI(base, features) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9000);
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(`${base}/predict`, {
       method: "POST",
@@ -393,7 +421,9 @@ function updateBadge(tabId, riskLevel, operationalStatus = "") {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url) {
-    chrome.storage.local.remove(`tab_${tabId}`);
+    chrome.storage.local.set({
+      [`tab_${tabId}`]: { status: "loading", url: changeInfo.url, timestamp: Date.now() },
+    });
     chrome.tabs.sendMessage(tabId, { type: "URL_CHANGED", url: changeInfo.url }, () => {
       void chrome.runtime.lastError;
     });
