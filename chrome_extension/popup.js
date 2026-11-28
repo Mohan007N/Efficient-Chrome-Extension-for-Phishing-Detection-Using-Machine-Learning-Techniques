@@ -458,18 +458,40 @@ $("clearHistoryBtn")?.addEventListener("click", async () => {
   renderHistory();
 });
 
+function samePageUrl(u1, u2) {
+  if (!u1 || !u2) return false;
+  if (u1 === u2) return true;
+  if (typeof U.normalizeUrlForCache === "function") {
+    return U.normalizeUrlForCache(u1) === U.normalizeUrlForCache(u2);
+  }
+  return false;
+}
+
+function safeRenderAssessment(data) {
+  try {
+    renderAssessment(data);
+  } catch (err) {
+    console.error("[WebShield] renderAssessment error:", err);
+    if ($("errorMsg")) {
+      $("errorMsg").textContent = `UI render error: ${err?.message || "Unexpected assessment payload."}`;
+    }
+    showView("error");
+  }
+}
+
 async function triggerRescan() {
   if (!hasChromeTabs) { showView("idle"); return; }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || !tab.url.startsWith("http")) {
+  const tabUrl = tab && (tab.url || tab.pendingUrl);
+  if (!tab || !tab.id || !tabUrl || !tabUrl.startsWith("http")) {
     showView("idle");
     return;
   }
   activeTabId = tab.id;
   currentData = null;
   const key = `tab_${tab.id}`;
-  await store.set({ [key]: { status: "loading", url: tab.url, timestamp: Date.now() } });
-  chrome.runtime.sendMessage({ type: "RESCAN_TAB", tabId: tab.id }, (resp) => {
+  await store.set({ [key]: { status: "loading", url: tabUrl, timestamp: Date.now() } });
+  chrome.runtime.sendMessage({ type: "RESCAN_TAB", tabId: tab.id }, () => {
     if (chrome.runtime.lastError) {
       $("errorMsg").textContent = chrome.runtime.lastError.message || "Could not contact tab scanner.";
       showView("error");
@@ -486,7 +508,7 @@ $("retryErrorBtn")?.addEventListener("click", triggerRescan);
 
 function pollTab(key, attempt = 0, token = activePollToken) {
   if (token !== activePollToken) return;
-  if (attempt > 34) {
+  if (attempt > 55) {
     $("errorMsg").textContent = "Scan timed out. Check backend connection (OFFLINE).";
     showView("error");
     return;
@@ -501,7 +523,7 @@ function pollTab(key, attempt = 0, token = activePollToken) {
       showView("error");
       return;
     }
-    if (data.status === "done") renderAssessment(data);
+    if (data.status === "done") safeRenderAssessment(data);
   }, 450);
 }
 
@@ -513,12 +535,12 @@ if (hasChromeStorage && chrome.storage.onChanged) {
     const nextData = ch.newValue;
     if (nextData.status === "done") {
       activePollToken++;
-      renderAssessment(nextData);
+      safeRenderAssessment(nextData);
     } else if (nextData.status === "error" || nextData.status === "offline") {
       activePollToken++;
       $("errorMsg").textContent = nextData.error || "Backend offline or unreachable.";
       showView("error");
-    } else if (nextData.status === "loading" && (!currentData || currentData.url !== nextData.url)) {
+    } else if (nextData.status === "loading" && (!currentData || !samePageUrl(currentData.url, nextData.url))) {
       showView("loading");
     }
   });
@@ -533,7 +555,8 @@ async function bootstrap() {
     return;
   }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || !tab.url.startsWith("http")) {
+  const tabUrl = tab && (tab.url || tab.pendingUrl);
+  if (!tab || !tab.id || !tabUrl || !tabUrl.startsWith("http")) {
     showView("idle");
     return;
   }
@@ -541,8 +564,9 @@ async function bootstrap() {
   const key = `tab_${tab.id}`;
   const res = await store.get(key);
   const data = res[key];
-  if (!data || (data.url && data.url !== tab.url)) {
-    // Missing or stale result (e.g., extension reloaded on open tab or SPA navigation just happened): auto-scan immediately
+  const loadingStale = data && data.status === "loading" && (!data.timestamp || Date.now() - Number(data.timestamp) > 8000);
+  if (!data || (data.url && !samePageUrl(data.url, tabUrl)) || loadingStale) {
+    // Missing, URL-changed, or orphaned loading state: trigger active rescan (with service-worker URL fallback)
     await triggerRescan();
   } else if (data.status === "loading") {
     showView("loading");
@@ -551,7 +575,7 @@ async function bootstrap() {
     $("errorMsg").textContent = data.error || "Backend offline or unreachable.";
     showView("error");
   } else if (data.status === "done") {
-    renderAssessment(data);
+    safeRenderAssessment(data);
   }
 }
 

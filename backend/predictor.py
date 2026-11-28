@@ -310,6 +310,7 @@ class PhishingPredictor:
                 clean_legacy,
                 deep_scan=deep_scan,
                 use_ai_audit=False,
+                skip_page_fetch=(has_dom_observation and analysis_mode == "extension_dom"),
             )
         )
 

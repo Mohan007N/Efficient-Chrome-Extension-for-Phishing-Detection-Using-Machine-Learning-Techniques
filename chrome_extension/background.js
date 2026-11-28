@@ -162,29 +162,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     chrome.tabs.get(tabId, (tab) => {
-      if (chrome.runtime.lastError || !tab || !tab.url || !tab.url.startsWith("http")) {
+      const tabUrl = tab && (tab.url || tab.pendingUrl);
+      if (chrome.runtime.lastError || !tab || !tabUrl || !tabUrl.startsWith("http")) {
         sendResponse({ ok: false, reason: "Non-web page" });
         return;
       }
+      const rescanStartedAt = Date.now();
+      const scheduleUrlFallbackIfStuck = () => {
+        setTimeout(async () => {
+          const curObj = await chrome.storage.local.get(`tab_${tabId}`);
+          const cur = curObj[`tab_${tabId}`];
+          if (cur && cur.status === "loading" && Number(cur.timestamp || 0) >= rescanStartedAt - 1000) {
+            await analyzeTabUrlFallback(tabId, tabUrl);
+          }
+        }, 3500);
+      };
       chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, () => {
         if (chrome.runtime.lastError) {
-          // Content script wasn't loaded on already-open tab (e.g. after extension reload): inject directly
           if (chrome.scripting && chrome.scripting.executeScript) {
             chrome.scripting.executeScript(
               { target: { tabId }, files: ["utils.js", "content.js"] },
               () => {
                 if (chrome.runtime.lastError) {
-                  chrome.tabs.reload(tabId);
+                  analyzeTabUrlFallback(tabId, tabUrl);
                 } else {
                   chrome.tabs.sendMessage(tabId, { type: "TRIGGER_RESCAN" }, () => {
-                    void chrome.runtime.lastError;
+                    if (chrome.runtime.lastError) {
+                      analyzeTabUrlFallback(tabId, tabUrl);
+                    } else {
+                      scheduleUrlFallbackIfStuck();
+                    }
                   });
                 }
               }
             );
           } else {
-            chrome.tabs.reload(tabId);
+            analyzeTabUrlFallback(tabId, tabUrl);
           }
+        } else {
+          scheduleUrlFallbackIfStuck();
         }
       });
       sendResponse({ ok: true });
@@ -260,7 +276,7 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
     const cachedObj = await chrome.storage.local.get(cacheKey);
     const cached = cachedObj[cacheKey];
     if (U.isCacheEntryValid(cached, modelVersion, now, CACHE_TTL_MS)) {
-      const storageData = { ...cached, status: "done", features };
+      const storageData = { ...cached, url: pageUrl, status: "done", features };
       await chrome.storage.local.set({ [`tab_${tabId}`]: storageData });
       updateBadge(tabId, storageData.risk_level, storageData.operational_status);
       chrome.tabs.sendMessage(tabId, { type: "PHISHING_RESULT", data: storageData }, () => { void chrome.runtime.lastError; });
@@ -328,7 +344,7 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
         title: `WebShield ${result.risk_level} RISK (${idx}/100)`,
         message: `${host}: ${result.assessment?.recommended_action || "Avoid entering credentials or payment info."}`,
         priority: 2,
-      });
+      }, () => { void chrome.runtime.lastError; });
     }
     return { ok: true };
   } catch (err) {
@@ -347,9 +363,71 @@ async function handleAnalyzePage(tabId, pageUrl, features, force) {
   }
 }
 
+async function analyzeTabUrlFallback(tabId, pageUrl) {
+  const host = extractHostname(pageUrl);
+  const baseUrl = await getApiBaseUrl();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const resp = await fetch(`${baseUrl}/analyze-url`, {
+      method: "POST",
+      headers: await getApiHeaders({ "Content-Type": "application/json", "Accept": "application/json" }),
+      body: JSON.stringify({ url: pageUrl, fetch_live: false, deep_scan: false }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      throw new Error(`API ${resp.status}`);
+    }
+    const result = await resp.json();
+    const overall = result.overall_risk_level || "UNKNOWN";
+    const storageData = {
+      status: "done",
+      url: pageUrl,
+      model_version: await getActiveModelVersion(baseUrl),
+      timestamp: Date.now(),
+      is_phishing: overall === "HIGH" || overall === "CRITICAL",
+      phishing_probability: result.phishing_probability,
+      legitimate_probability: result.phishing_probability != null ? Number((1 - result.phishing_probability).toFixed(4)) : null,
+      heuristic_risk_index: result.heuristic_risk_index ?? null,
+      operational_status: result.operational_status || "Unknown",
+      connection_security: result.connection_security || "UNKNOWN",
+      model_availability: result.model_availability || {},
+      verdict: result.verdict || "",
+      prediction_label: result.prediction_label || "",
+      risk_level: overall,
+      confidence: result.confidence ?? null,
+      whitelisted: false,
+      top_indicators: result.evidence || [],
+      shap_attributions: result.shap_attributions || [],
+      diagnostics: result.diagnostics || {},
+      assessment: result,
+      features: { url: pageUrl, hostname: host, dom_features: {} },
+    };
+    await chrome.storage.local.set({ [`tab_${tabId}`]: storageData });
+    await appendScanHistory(storageData);
+    updateBadge(tabId, overall, storageData.operational_status);
+    return { ok: true, fallback: true };
+  } catch (err) {
+    await chrome.storage.local.set({
+      [`tab_${tabId}`]: {
+        status: "offline",
+        operational_status: "OFFLINE",
+        risk_level: "UNKNOWN",
+        url: pageUrl,
+        timestamp: Date.now(),
+        error: err.message || "Backend service offline or unreachable.",
+      },
+    });
+    updateBadge(tabId, "UNKNOWN", "OFFLINE");
+    return { error: err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callPredictAPI(base, features) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const response = await fetch(`${base}/predict`, {
       method: "POST",

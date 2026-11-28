@@ -15,6 +15,33 @@
   const proto = window.location.protocol;
   if (proto !== "http:" && proto !== "https:") return;
 
+  if (typeof window.__webshield_teardown__ === "function") {
+    try { window.__webshield_teardown__(); } catch (_) {}
+  }
+  let disposed = false;
+  let debounceTimer = null;
+  let meaningfulTimer = null;
+  let observer = null;
+  let spaPollInterval = null;
+
+  function isContextAlive() {
+    try {
+      return !disposed && typeof chrome !== "undefined" && !!chrome.runtime && !!chrome.runtime.id;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function teardownIfInvalid() {
+    if (isContextAlive()) return false;
+    if (typeof window.__webshield_teardown__ === "function") {
+      try { window.__webshield_teardown__(); } catch (_) {}
+    } else {
+      disposed = true;
+    }
+    return true;
+  }
+
   const U = (typeof globalThis !== "undefined" && globalThis.WebShieldUtils) || {
     escapeHtml: (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
     computeDomFingerprint: () => "dom_0",
@@ -42,7 +69,6 @@
   const MUTATION_COOLDOWN_MS = 2500;
   const MUTATION_WINDOW_MS = 60000;
   const MAX_MUTATIONS_PER_WINDOW = 6;
-  let debounceTimer = null;
   let lastMutationScanAt = 0;
   let mutationTimestamps = [];
   let lastObservedUrl = window.location.href;
@@ -454,35 +480,54 @@
   }
 
   function dispatchScan(currentUrl, force) {
+    if (teardownIfInvalid()) return;
     try {
       const payload = extractStructuredFeatures();
       const sig = `${currentUrl}::${payload.dom_features.dom_fingerprint}`;
       if (!force && window[SCAN_KEY] === sig) return;
       window[SCAN_KEY] = sig;
+      if (teardownIfInvalid()) return;
       chrome.runtime.sendMessage({ type: "ANALYZE_PAGE", url: currentUrl, force, features: payload }, () => {
-        if (chrome.runtime.lastError) return;
+        try {
+          if (chrome.runtime.lastError) return;
+        } catch (_) {}
       });
     } catch (err) {
+      const msg = String((err && err.message) || err || "");
+      if (msg.includes("Extension context invalidated") || teardownIfInvalid()) {
+        return;
+      }
       console.warn("[WebShield] Feature extraction error:", err);
     }
   }
 
   function runScan(force = false) {
+    if (teardownIfInvalid()) return;
     const currentUrl = window.location.href;
     if (!force && SERP_PATTERNS.some(p => p.test(currentUrl))) return;
     if (!force && !isPageMeaningful()) {
-      setTimeout(() => { if (isPageMeaningful()) dispatchScan(currentUrl, force); }, 1200);
+      if (meaningfulTimer) clearTimeout(meaningfulTimer);
+      meaningfulTimer = setTimeout(() => {
+        meaningfulTimer = null;
+        if (teardownIfInvalid()) return;
+        if (isPageMeaningful()) dispatchScan(currentUrl, force);
+      }, 1200);
       return;
     }
     dispatchScan(currentUrl, force);
   }
 
   function scheduleDebouncedScan(force = false, delayMs = 700) {
+    if (teardownIfInvalid()) return;
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => runScan(force), delayMs);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      if (!teardownIfInvalid()) runScan(force);
+    }, delayMs);
   }
 
   function handleSpaNavigation() {
+    if (teardownIfInvalid()) return;
     const nextUrl = window.location.href;
     if (nextUrl !== lastObservedUrl) {
       lastObservedUrl = nextUrl;
@@ -493,26 +538,30 @@
     }
   }
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === "PHISHING_RESULT" && message.data) {
-      injectWarningBanner(message.data);
-    }
-    if (message.type === "URL_CHANGED") {
-      handleSpaNavigation();
-    }
-    if (message.type === "TRIGGER_RESCAN") {
-      mutationTimestamps = [];
-      lastMutationScanAt = 0;
-      delete window[SCAN_KEY];
-      runScan(true);
-      sendResponse({ ok: true });
-      return true;
-    }
-  });
+  if (isContextAlive()) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (teardownIfInvalid()) return;
+      if (message.type === "PHISHING_RESULT" && message.data) {
+        injectWarningBanner(message.data);
+      }
+      if (message.type === "URL_CHANGED") {
+        handleSpaNavigation();
+      }
+      if (message.type === "TRIGGER_RESCAN") {
+        mutationTimestamps = [];
+        lastMutationScanAt = 0;
+        delete window[SCAN_KEY];
+        runScan(true);
+        sendResponse({ ok: true });
+        return true;
+      }
+    });
+  }
 
   // Sliding-window throttled MutationObserver detects dynamic forms, iframes, or SPA route updates without stopping permanently
   if (typeof MutationObserver !== "undefined" && document.documentElement) {
-    const observer = new MutationObserver((mutations) => {
+    observer = new MutationObserver((mutations) => {
+      if (teardownIfInvalid()) return;
       if (window.location.href !== lastObservedUrl) {
         handleSpaNavigation();
         return;
@@ -569,9 +618,25 @@
   scheduleDebouncedScan(false);
   window.addEventListener("popstate", handleSpaNavigation);
   window.addEventListener("hashchange", handleSpaNavigation);
-  setInterval(() => {
+  spaPollInterval = setInterval(() => {
+    if (teardownIfInvalid()) return;
     if (window.location.href !== lastObservedUrl) {
       handleSpaNavigation();
     }
   }, 1000);
+
+  window.__webshield_teardown__ = () => {
+    disposed = true;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (meaningfulTimer) clearTimeout(meaningfulTimer);
+    if (autoDismissTimer) clearTimeout(autoDismissTimer);
+    if (spaPollInterval) clearInterval(spaPollInterval);
+    debounceTimer = null;
+    meaningfulTimer = null;
+    spaPollInterval = null;
+    if (observer) observer.disconnect();
+    observer = null;
+    window.removeEventListener("popstate", handleSpaNavigation);
+    window.removeEventListener("hashchange", handleSpaNavigation);
+  };
 })();

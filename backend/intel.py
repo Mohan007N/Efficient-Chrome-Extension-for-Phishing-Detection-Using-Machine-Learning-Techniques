@@ -320,6 +320,7 @@ class UnauthorizedIntelEngine:
         features_dict: dict | None = None,
         deep_scan: bool = True,
         use_ai_audit: bool = False,
+        skip_page_fetch: bool = False,
     ) -> dict:
         """
         Gather threat intelligence, Tranco rank, brand similarity, RDAP age, TLS info,
@@ -370,22 +371,23 @@ class UnauthorizedIntelEngine:
 
         dom_valid = cached_dom is not None and (now - cached_dom[0]) < self.cache_ttl_seconds
         page_valid = cached_page is not None and (now - cached_page[0]) < self.cache_ttl_seconds
+        need_page_fetch = (not skip_page_fetch) and (not page_valid)
 
-        if dom_valid and page_valid:
+        if dom_valid and (page_valid or skip_page_fetch):
             domain_data = cached_dom[1]
-            forensics_info = cached_page[1]
+            forensics_info = cached_page[1] if page_valid else {}
         else:
             with ThreadPoolExecutor(max_workers=3) as pool:
                 fut_rdap = None if dom_valid else pool.submit(inspect_rdap_domain, root or host, 2.5)
                 fut_tls = None if dom_valid else pool.submit(inspect_tls_certificate, host, 2.5)
-                fut_html = None if page_valid else pool.submit(self._safe_fetch_and_forensics, target_url)
+                fut_html = pool.submit(self._safe_fetch_and_forensics, target_url) if need_page_fetch else None
 
                 domain_data = (
                     cached_dom[1]
                     if dom_valid
                     else {"rdap": fut_rdap.result(), "tls": fut_tls.result()}
                 )
-                forensics_info = cached_page[1] if page_valid else fut_html.result()
+                forensics_info = cached_page[1] if page_valid else (fut_html.result() if fut_html else {})
 
             with self._cache_lock:
                 if not dom_valid:
@@ -393,7 +395,7 @@ class UnauthorizedIntelEngine:
                         oldest_k = min(self._domain_meta_cache.items(), key=lambda kv: kv[1][0])[0]
                         del self._domain_meta_cache[oldest_k]
                     self._domain_meta_cache[domain_key] = (now, domain_data)
-                if not page_valid:
+                if need_page_fetch:
                     if len(self._page_forensics_cache) >= MAX_LIVE_CACHE_ENTRIES:
                         oldest_pk = min(self._page_forensics_cache.items(), key=lambda kv: kv[1][0])[0]
                         del self._page_forensics_cache[oldest_pk]
